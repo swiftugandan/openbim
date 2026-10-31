@@ -87,7 +87,20 @@ li { padding-left: 4px; }
 .button.primary:hover { background: var(--accent); border-color: var(--accent); color: var(--sheet); }
 figure { margin: 0; min-width: 0; }
 .plan { display: block; width: 100%; max-width: 100%; height: auto; }
-.plan text { font-family: var(--mono); fill: var(--ink-2); }
+/* Plan line weights follow ISO 128 at 1:100, in model millimetres */
+.plan .cut { fill: url(#hatch); stroke: var(--ink); stroke-width: 50; stroke-linejoin: miter; }
+.plan .p { fill: var(--sheet); stroke: var(--ink); stroke-width: 25; }
+.plan .t { fill: none; stroke: var(--ink); stroke-width: 15; }
+.plan .fix .t { stroke: var(--ink-2); }
+.plan .g { stroke: var(--rule); stroke-width: 15; stroke-dasharray: 400 100 60 100; }
+.plan .b { fill: var(--sheet); stroke: var(--ink-2); stroke-width: 15; }
+.plan .bt { font: 500 240px var(--mono); fill: var(--ink-2); text-anchor: middle; }
+.plan .room { font: 600 250px var(--body); fill: var(--ink); text-anchor: middle; }
+.plan .area { font: 400 210px var(--mono); fill: var(--ink-2); text-anchor: middle; }
+.plan .d { stroke: var(--accent); stroke-width: 15; }
+.plan .dk { stroke: var(--accent); stroke-width: 35; }
+.plan .dt { font: 400 220px var(--mono); fill: var(--accent); text-anchor: middle; }
+.plan .na { fill: var(--ink); }
 figcaption { margin-top: 8px; font-size: .9375rem; color: var(--ink-2); }
 
 /* Parts */
@@ -136,50 +149,19 @@ pre .p { color: var(--ink-2); user-select: none; }
       </div>
 
       <figure>
-        <svg class="plan" viewBox="0 0 520 380" role="img" aria-labelledby="plan-t">
-          <title id="plan-t">Floor plan of 2 rooms, 11.10 and 9.09 square metres, with hatched walls, 2 doors, 2 windows and a 6000 millimetre dimension</title>
-          <defs>
-            <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-              <line x1="0" y1="0" x2="0" y2="7" stroke="var(--hatch)" stroke-width="1"/>
-            </pattern>
-          </defs>
-          <g stroke="var(--rule)" stroke-width="0.8" stroke-dasharray="14 4 2 4" fill="none">
-            <line x1="70" y1="24" x2="70" y2="340"/><line x1="430" y1="24" x2="430" y2="340"/>
-            <line x1="30" y1="70" x2="478" y2="70"/><line x1="30" y1="310" x2="478" y2="310"/>
-          </g>
-          <g font-size="11" text-anchor="middle">
-            <circle cx="70" cy="14" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="70" y="18">A</text>
-            <circle cx="430" cy="14" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="430" y="18">B</text>
-            <circle cx="494" cy="70" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="494" y="74">1</text>
-            <circle cx="494" cy="310" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="494" y="314">2</text>
-          </g>
-          <path fill="url(#hatch)" stroke="var(--ink)" stroke-width="2.4" fill-rule="evenodd"
-            d="M62 62 H438 V318 H300 V306 H426 V74 H74 V306 H240 V318 H62 Z"/>
-          <path fill="url(#hatch)" stroke="var(--ink)" stroke-width="2.4" d="M262 74 H272 V170 H262 Z M262 218 H272 V306 H262 Z"/>
-          <g stroke="var(--ink)" stroke-width="1.2">
-            <rect x="120" y="62" width="90" height="12" fill="var(--sheet)"/><line x1="120" y1="68" x2="210" y2="68"/>
-            <rect x="320" y="62" width="70" height="12" fill="var(--sheet)"/><line x1="320" y1="68" x2="390" y2="68"/>
-          </g>
-          <g fill="none" stroke="var(--ink)" stroke-width="1.2">
-            <line x1="240" y1="312" x2="240" y2="252"/>
-            <path d="M240 252 A60 60 0 0 1 300 312" stroke-width="0.8" stroke-dasharray="4 3"/>
-            <line x1="272" y1="170" x2="312" y2="170"/>
-            <path d="M312 170 A48 48 0 0 1 272 218" stroke-width="0.8" stroke-dasharray="4 3"/>
-          </g>
-          <g text-anchor="middle">
-            <text x="168" y="186" font-size="13" style="fill:var(--ink)">Room 1</text>
-            <text x="168" y="204" font-size="12">11.10 m²</text>
-            <text x="350" y="186" font-size="13" style="fill:var(--ink)">Room 2</text>
-            <text x="350" y="204" font-size="12">9.09 m²</text>
-          </g>
-          <g stroke="var(--accent)" stroke-width="0.8" fill="none">
-            <line x1="62" y1="364" x2="62" y2="332"/><line x1="438" y1="364" x2="438" y2="332"/>
-            <line x1="62" y1="354" x2="438" y2="354"/>
-            <line x1="57" y1="359" x2="67" y2="349" stroke-width="1.6"/><line x1="433" y1="359" x2="443" y2="349" stroke-width="1.6"/>
-          </g>
-          <text x="250" y="347" text-anchor="middle" font-size="13" style="fill:var(--accent)">6000</text>
+        <svg class="plan" viewBox="-700 -1400 12200 9050" role="img" aria-labelledby="plan-t">
+          <title id="plan-t">Floor plan of a one-bedroom flat for 2 people, 51.8 square metres: living and kitchen 25.9, bedroom 13.2, bathroom 4.8, hall 3.8 and store 2.8 square metres</title>
+          <defs><pattern id="hatch" width="160" height="160" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="160" stroke="var(--hatch)" stroke-width="18"/></pattern></defs>
+          <g class="grid"><line x1="150" y1="-550" x2="150" y2="6350" class="g"/><line x1="5150" y1="-550" x2="5150" y2="6350" class="g"/><line x1="10050" y1="-550" x2="10050" y2="6350" class="g"/><line x1="-450" y1="150" x2="10750" y2="150" class="g"/><line x1="-450" y1="5850" x2="10750" y2="5850" class="g"/><circle cx="150" cy="-800" r="250" class="b"/><text x="150" y="-710" class="bt">A</text><circle cx="5150" cy="-800" r="250" class="b"/><text x="5150" y="-710" class="bt">B</text><circle cx="10050" cy="-800" r="250" class="b"/><text x="10050" y="-710" class="bt">C</text><circle cx="11000" cy="150" r="250" class="b"/><text x="11000" y="240" class="bt">1</text><circle cx="11000" cy="5850" r="250" class="b"/><text x="11000" y="5940" class="bt">2</text></g>
+          <g class="fix"><rect x="300" y="5100" width="3000" height="600" class="t"/><rect x="1700" y="5200" width="600" height="400" rx="60" class="t"/><circle cx="650" cy="5250" r="110" class="t"/><circle cx="650" cy="5550" r="110" class="t"/><circle cx="950" cy="5250" r="110" class="t"/><circle cx="950" cy="5550" r="110" class="t"/><rect x="1200" y="3200" width="1400" height="800" class="t"/><rect x="1450" y="2750" width="400" height="400" class="t"/><rect x="1450" y="4050" width="400" height="400" class="t"/><rect x="1950" y="2750" width="400" height="400" class="t"/><rect x="1950" y="4050" width="400" height="400" class="t"/><rect x="4250" y="600" width="800" height="2000" rx="60" class="t"/><line x1="4850" y1="700" x2="4850" y2="2500" class="t"/><rect x="3500" y="1100" width="500" height="1000" class="t"/><rect x="7900" y="950" width="2000" height="1500" class="t"/><line x1="9100" y1="950" x2="9100" y2="2450" class="t"/><rect x="9500" y="1050" width="350" height="600" rx="60" class="t"/><rect x="9500" y="1750" width="350" height="600" rx="60" class="t"/><rect x="9450" y="450" width="450" height="450" class="t"/><rect x="9450" y="2500" width="450" height="450" class="t"/><rect x="6800" y="5000" width="1700" height="700" class="t"/><rect x="6900" y="5080" width="1500" height="540" rx="220" class="t"/><rect x="8500" y="3700" width="200" height="500" class="t"/><ellipse cx="8230" cy="3950" rx="270" ry="190" class="t"/><rect x="7800" y="3200" width="500" height="450" class="t"/><ellipse cx="8050" cy="3430" rx="180" ry="140" class="t"/><rect x="9500" y="4600" width="400" height="1100" class="t"/><line x1="9500" y1="5150" x2="9900" y2="5150" class="t"/></g>
+          <path class="cut" fill-rule="evenodd" d="M300 1500 L300 300 L1500 300 L1500 0 L0 0 L0 300 L0 1500 Z M5100 3500 L5200 3500 L5200 3200 L5350 3200 L5350 3100 L5200 3100 L5200 300 L6400 300 L6400 0 L3900 0 L3900 300 L5100 300 Z M1500 6000 L1500 5700 L300 5700 L300 3900 L0 3900 L0 5700 L0 6000 Z M2500 5700 L2500 6000 L5450 6000 L5450 5700 L5200 5700 L5200 4300 L5100 4300 L5100 5700 Z M9900 300 L9900 3100 L9700 3100 L9700 3200 L9900 3200 L9900 5700 L8800 5700 L8800 3200 L9000 3200 L9000 3100 L6150 3100 L6150 3200 L6700 3200 L6700 3350 L6800 3350 L6800 3200 L8700 3200 L8700 5700 L8200 5700 L8200 6000 L10200 6000 L10200 5700 L10200 300 L10200 0 L8400 0 L8400 300 Z M6350 5700 L6350 6000 L7200 6000 L7200 5700 L6800 5700 L6800 4150 L6700 4150 L6700 5700 Z"/>
+          <g class="win"><line x1="1500" y1="0" x2="3900" y2="0" class="p"/><line x1="1500" y1="300" x2="3900" y2="300" class="p"/><line x1="1500" y1="125.0" x2="3900" y2="125.0" class="t"/><line x1="1500" y1="175.0" x2="3900" y2="175.0" class="t"/><line x1="6400" y1="0" x2="8400" y2="0" class="p"/><line x1="6400" y1="300" x2="8400" y2="300" class="p"/><line x1="6400" y1="125.0" x2="8400" y2="125.0" class="t"/><line x1="6400" y1="175.0" x2="8400" y2="175.0" class="t"/><line x1="0" y1="1500" x2="0" y2="3900" class="p"/><line x1="300" y1="1500" x2="300" y2="3900" class="p"/><line x1="125.0" y1="1500" x2="125.0" y2="3900" class="t"/><line x1="175.0" y1="1500" x2="175.0" y2="3900" class="t"/><line x1="1500" y1="5700" x2="2500" y2="5700" class="p"/><line x1="1500" y1="6000" x2="2500" y2="6000" class="p"/><line x1="1500" y1="5825.0" x2="2500" y2="5825.0" class="t"/><line x1="1500" y1="5875.0" x2="2500" y2="5875.0" class="t"/><line x1="7200" y1="5700" x2="8200" y2="5700" class="p"/><line x1="7200" y1="6000" x2="8200" y2="6000" class="p"/><line x1="7200" y1="5825.0" x2="8200" y2="5825.0" class="t"/><line x1="7200" y1="5875.0" x2="8200" y2="5875.0" class="t"/></g>
+          <g class="door"><rect x="5450" y="4800" width="40" height="900" class="p"/><path d="M5450 4800 A900 900 0 0 1 6350 5700" class="t"/><rect x="4300" y="3500" width="800" height="40" class="p"/><path d="M4300 3500 A800 800 0 0 0 5100 4300" class="t"/><rect x="5350" y="2300" width="40" height="800" class="p"/><path d="M5350 2300 A800 800 0 0 1 6150 3100" class="t"/><rect x="6800" y="3350" width="800" height="40" class="p"/><path d="M7600 3350 A800 800 0 0 1 6800 4150" class="t"/><rect x="9660" y="3200" width="40" height="700" class="p"/><path d="M9700 3900 A700 700 0 0 1 9000 3200" class="t"/></g>
+          <g><text x="2000" y="1650" class="room">Living and kitchen</text><text x="2000" y="1980" class="area">25.9 m²</text><text x="6700" y="1500" class="room">Bedroom</text><text x="6700" y="1830" class="area">13.2 m²</text><text x="5950" y="3850" class="room">Hall</text><text x="5950" y="4180" class="area">3.8 m²</text><text x="7650" y="4500" class="room">Bathroom</text><text x="7650" y="4830" class="area">4.8 m²</text><text x="9350" y="4200" class="room">Store</text><text x="9350" y="4530" class="area">2.8 m²</text></g>
+          <g><line x1="0" y1="6700" x2="5300" y2="6700" class="d"/><line x1="150" y1="6450" x2="150" y2="6850" class="d"/><line x1="5150" y1="6450" x2="5150" y2="6850" class="d"/><line x1="80" y1="6770" x2="220" y2="6630" class="dk"/><line x1="5080" y1="6770" x2="5220" y2="6630" class="dk"/><text x="2650.0" y="6610" class="dt">5000</text><line x1="5000" y1="6700" x2="10200" y2="6700" class="d"/><line x1="5150" y1="6450" x2="5150" y2="6850" class="d"/><line x1="10050" y1="6450" x2="10050" y2="6850" class="d"/><line x1="5080" y1="6770" x2="5220" y2="6630" class="dk"/><line x1="9980" y1="6770" x2="10120" y2="6630" class="dk"/><text x="7600.0" y="6610" class="dt">4900</text><line x1="-150" y1="7300" x2="10350" y2="7300" class="d"/><line x1="0" y1="6150" x2="0" y2="7450" class="d"/><line x1="10200" y1="6150" x2="10200" y2="7450" class="d"/><line x1="-70" y1="7370" x2="70" y2="7230" class="dk"/><line x1="10130" y1="7370" x2="10270" y2="7230" class="dk"/><text x="5100.0" y="7210" class="dt">10200</text></g>
+          <g transform="translate(11000 -800)"><circle r="250" class="b"/><path d="M0 -230 L120 160 L0 80 L-120 160 Z" class="na"/></g><text x="11000" y="-1120" class="bt">N</text>
         </svg>
-        <figcaption>An example of the kind of floor plan openbim is designed to produce. Scale 1:100, sizes in millimetres.</figcaption>
+        <figcaption>An example of the kind of drawing openbim is designed to produce: a one-bedroom flat for 2 people with 51.8 m² of internal floor area. Drawn at 1:100, sizes in millimetres.</figcaption>
       </figure>
     </section>
 
