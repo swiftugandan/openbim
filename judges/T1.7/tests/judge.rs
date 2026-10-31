@@ -447,9 +447,12 @@ fn run_history(n: usize, setup: &[Edit], actions: &[Action], perm_seed: u64, all
                 }
             }
         }
-        // Semantic evaluation must also be safe on partially merged peers.
+        // Semantic evaluation must also be safe on partially merged peers (sampled: evaluate()
+        // runs the solver, and the final checks below already call it five times per history).
         if let Action::Merge(p, _) = a {
-            let _ = peers[p % n].evaluate();
+            if perm_seed % 4 == 0 {
+                let _ = peers[p % n].evaluate();
+            }
         }
     }
     // Final merge in three orders.

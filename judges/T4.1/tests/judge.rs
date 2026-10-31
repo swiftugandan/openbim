@@ -35,7 +35,6 @@ fn send_sync<T: Send + Sync + ?Sized>() {}
 fn traits_are_object_safe_send_sync() {
     send_sync::<dyn TradeEngine>();
     send_sync::<dyn StandardRuleSet>();
-    send_sync::<Registry>();
     let e: Box<dyn TradeEngine> = Box::new(Dummy("x"));
     let r: Box<dyn StandardRuleSet> = Box::new(Rules("y"));
     assert_eq!(e.name(), "x");

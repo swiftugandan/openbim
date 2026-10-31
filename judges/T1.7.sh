@@ -9,7 +9,8 @@ for c in bim-doc bim-crdt bim-solver; do
   [ -f "crates/$c/Cargo.toml" ] || fail "crate crates/$c does not exist"
 done
 cargo test -q --manifest-path judges/T1.7/Cargo.toml --no-run || fail "judge does not compile against bim-crdt/bim-doc"
-# perl's alarm is a portable timeout: a hung evaluate() must fail, not stall the loop.
-perl -e 'alarm shift; exec @ARGV or die' 170 cargo test -q --manifest-path judges/T1.7/Cargo.toml \
+# perl's alarm is a portable timeout: a hung evaluate() must fail, not stall the loop. 600 s plus a
+# cold proptest compile (~190 s) stays inside the loop's 900 s gate; a warm run should take well under a minute.
+perl -e 'alarm shift; exec @ARGV or die' 600 cargo test -q --manifest-path judges/T1.7/Cargo.toml \
   || fail "bim-crdt semantic layer tests failed or timed out (see above)"
 echo "T1.7 judge: all checks passed"

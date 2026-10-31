@@ -7,6 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 import { oracle, CHROME, ROOT } from "../lib/oracle.mjs";
 import { serve, deadline } from "./serve.mjs";
 import {
@@ -14,11 +15,12 @@ import {
   propValue, clickIn, setProp,
 } from "./studio.mjs";
 
-deadline(150_000, "T8.4 checks");
+deadline(240_000, "T8.4 checks"); // hang guard only; the bench wait alone may take up to 140 s
 const BIM = process.argv[2];
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "judge-t84-"));
 const children = [];
 process.on("exit", () => { for (const c of children) c.kill("SIGKILL"); fs.rmSync(tmp, { recursive: true, force: true }); });
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(sig, () => process.exit(1)); // still runs the exit cleanup
 
 function bim(args, { ok = [0], timeout = 60_000 } = {}) {
   const r = spawnSync(BIM, args, { encoding: "utf8", timeout });
@@ -102,6 +104,49 @@ try {
     for (const x of v.violations || []) if (x.entity === "S1") expectRules.add(x.rule);
   }
   check(expectRules.size > 0, "fixture stair S1 (riser 0.233 m) has no ibc/eurocode violation from the CLI");
+
+  // ------------------- 0. bim-wasm Model.validate / issues (spec/web.md, added by T8.4) vs the CLI
+  const ISSUE = { op: "create", id: "I1", kind: "Issue", props: { title: "Judge issue wasm", status: "Open", entities: [ref("S1")] } };
+  const wref = project("wasmref", [...FIX, ISSUE]);
+  const pkgDir = path.join(ROOT, "packages/bim-wasm/pkg-node");
+  const pkgJson = path.join(pkgDir, "package.json");
+  check(fs.existsSync(pkgJson), "packages/bim-wasm/pkg-node/package.json missing (build.sh must produce it)");
+  const pkgMeta = JSON.parse(fs.readFileSync(pkgJson, "utf8"));
+  let wasm;
+  try { wasm = await import(pathToFileURL(path.join(pkgDir, pkgMeta.module ?? pkgMeta.main)).href); }
+  catch (e) { fail(`cannot import pkg-node: ${e.message}`); }
+  const Model = wasm.Model ?? wasm.default?.Model;
+  check(typeof Model?.fromOps === "function", "pkg-node does not export Model.fromOps");
+  const wm = Model.fromOps(JSON.stringify({ schema: 1, ops: [...FIX, ISSUE] }));
+  check(typeof wm.validate === "function" && typeof wm.issues === "function", "wasm Model lacks validate(standard) / issues()");
+  const vkey = (v) => `${v.rule}|${v.entity}`;
+  const sortV = (vs) => [...vs].sort((a, b) => (vkey(a) < vkey(b) ? -1 : vkey(a) > vkey(b) ? 1 : 0));
+  const closeNum = (a, b) => Math.abs(a - b) <= 1e-9 * Math.max(1, Math.abs(a), Math.abs(b));
+  for (const pack of ["ibc", "eurocode"]) {
+    const want = JSON.parse(bim(["validate", wref, "--standard", pack, "--json"], { ok: [0, 1] }));
+    let got;
+    try { got = JSON.parse(wm.validate(pack)); } catch (e) { fail(`Model.validate("${pack}") threw or returned non-JSON: ${e}`); }
+    for (const k of ["violations", "dangling", "conflicts"])
+      check(Array.isArray(got[k]), `Model.validate("${pack}") has no "${k}" array (want the bim validate --json document)`);
+    const gv = sortV(got.violations), wv = sortV(want.violations);
+    check(gv.length === wv.length, `Model.validate("${pack}") reports ${gv.length} violations, bim validate reports ${wv.length}`);
+    gv.forEach((g, i) => {
+      const w = wv[i];
+      const same = g.rule === w.rule && g.entity === w.entity && g.message === w.message && closeNum(g.measured, w.measured) && closeNum(g.limit, w.limit);
+      check(same, `Model.validate("${pack}") violation ${JSON.stringify(g)} differs from the CLI's ${JSON.stringify(w)}`);
+    });
+    check(got.dangling.length === want.dangling.length && got.conflicts.length === want.conflicts.length,
+      `Model.validate("${pack}") dangling/conflicts differ from bim validate`);
+  }
+  let issues;
+  try { issues = JSON.parse(wm.issues()); } catch (e) { fail(`Model.issues() threw or returned non-JSON: ${e}`); }
+  check(Array.isArray(issues) && issues.length === 1, `Model.issues() returned ${JSON.stringify(issues)}, want one Issue`);
+  const [is1] = issues;
+  check(is1.id === "I1" && is1.title === ISSUE.props.title && is1.status === ISSUE.props.status,
+    `Model.issues()[0] is ${JSON.stringify(is1)}, want id I1, title '${ISSUE.props.title}', status Open`);
+  const ents = Array.isArray(is1.entities) ? is1.entities.map((e) => (e && typeof e === "object" ? e.ref : e)) : [];
+  check(ents.length === 1 && ents[0] === "S1", `Model.issues()[0].entities is ${JSON.stringify(is1.entities)}, want ["S1"]`);
+
   const big = project("big", BIG);
   const port = await syncServe(main);
   const bigPort = await syncServe(big);
@@ -211,11 +256,30 @@ try {
 
   // ------------------------------------- 8. frame-time harness on a 10,000-element model
   const C = await openStudio(`?sync=ws://127.0.0.1:${bigPort}&bench=1`, "bench");
-  const p95 = await until(async () => {
+  // The harness orbits over the loaded document: the 10,000 elements must have arrived through sync
+  // and be on screen (viewport-3d far from uniform), and the reading is taken once it stops changing.
+  const readP95 = async () => {
     const m = (await C.locator(tid("status-bar")).first().innerText()).match(/p95\D{0,12}?(\d+(?:\.\d+)?)\s*ms/i);
     return m ? parseFloat(m[1]) : null;
-  }, 60_000, 500);
+  };
+  const busy = (img) => {
+    const hist = new Map();
+    for (let i = 0; i < img.data.length; i += 4) {
+      const k = ((img.data[i] >> 4) << 8) | ((img.data[i + 1] >> 4) << 4) | (img.data[i + 2] >> 4);
+      hist.set(k, (hist.get(k) || 0) + 1);
+    }
+    return 1 - Math.max(...hist.values()) / (img.w * img.h);
+  };
+  const loaded = await until(async () => busy(await shot(C, "viewport-3d")) >= 0.02, 60_000, 1000);
+  check(loaded, "viewport-3d stayed (nearly) uniform: the 10,000-element document did not arrive through ?sync=");
+  let p95 = await until(readP95, 60_000, 500);
   check(p95 !== null, "status-bar never reported 'p95 <n> ms' for the 10,000-element model (?bench=1)");
+  // Unchanged for 3 s = the harness has finished (a live rolling value is read after 20 s at most).
+  for (let stable = 0, end = Date.now() + 20_000; stable < 6 && Date.now() < end; ) {
+    await sleep(500);
+    const v = await readP95();
+    if (v === p95) stable++; else { stable = 0; p95 = v ?? p95; }
+  }
   check(p95 < 16.6, `frame time p95 ${p95} ms >= 16.6 ms on the 10,000-element model`);
   console.log(`T8.4 judge: all checks passed (p95 ${p95} ms)`);
 } catch (e) {

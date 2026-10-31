@@ -4,7 +4,8 @@ Drives the real `bim` binary (argv[1]): `solve --trade arch --json` must report 
 panel counts, mullion lengths, risers and treads; `export --format gltf` must contain, for each
 CurtainWall/Stair/Ramp entity (node extras.id), a closed solid equal to the reference solid that
 this judge builds independently with manifold3d from the conventions listed in the report
-(volume via trimesh and via the closed form; shape and placement via manifold3d XOR volume).
+(volume via trimesh and via the closed form; shape and placement via manifold3d XOR volume),
+read back through the y-up glTF frame of spec/cli.md: glTF (x, y, z) = model (x, z, −y).
 Run as: .oracles/py/bin/python -I judges/T4.3/judge.py <path-to-bim>
 """
 import base64
@@ -172,8 +173,9 @@ def load_gltf(path):
     return meshes
 
 
-# glTF is +Y up; the model is +Z up. Accept the identity or the standard Z-up → Y-up mapping.
-FRAMES = {"z-up": np.eye(3), "y-up": np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float)}
+# spec/cli.md: glTF (x, y, z) = model (x, z, −y), so model = (gx, −gz, gy); as a row-vector
+# right-multiplication, vertices @ Y_UP recovers model coordinates. Only this frame is accepted.
+Y_UP = np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]], dtype=float)
 
 
 def check_solid(eid, mesh, ref, ref_vol):
@@ -191,24 +193,20 @@ def check_solid(eid, mesh, ref, ref_vol):
     if not close(abs(m.volume), ref_vol, REL_MESH):
         fail(f"{eid}: solid volume {abs(m.volume)} expected {ref_vol}")
         return
-    best = None
-    for name, R in FRAMES.items():
-        v = m.vertices @ R  # model coordinates
-        try:
-            got = mf.Manifold(mf.Mesh(vert_properties=np.asarray(v, dtype=np.float32),
-                                      tri_verts=np.asarray(m.faces, dtype=np.uint32)))
-        except Exception:
-            continue
-        if got.is_empty():
-            continue
-        if got.volume() < 0:
-            continue
-        xor = (got - ref).volume() + (ref - got).volume()
-        best = xor if best is None else min(best, xor)
-    if best is None:
-        fail(f"{eid}: glTF mesh is not a valid manifold solid")
-    elif best > REL_MESH * ref_vol:
-        fail(f"{eid}: solid differs from the reference shape/placement by volume {best}")
+    v = m.vertices @ Y_UP  # model coordinates
+    try:
+        got = mf.Manifold(mf.Mesh(vert_properties=np.asarray(v, dtype=np.float32),
+                                  tri_verts=np.asarray(m.faces, dtype=np.uint32)))
+    except Exception as e:  # noqa: BLE001 - any rejection by manifold3d is a failed mesh
+        fail(f"{eid}: glTF mesh is not a valid manifold solid ({e})")
+        return
+    if got.is_empty() or got.volume() < 0:
+        fail(f"{eid}: glTF mesh is not a valid, outward-oriented manifold solid")
+        return
+    xor = (got - ref).volume() + (ref - got).volume()
+    if xor > REL_MESH * ref_vol:
+        fail(f"{eid}: solid differs from the reference shape/placement (in the y-up glTF frame "
+             f"of spec/cli.md) by volume {xor}")
 
 
 # ---------------------------------------------------------------- scenario

@@ -4,8 +4,10 @@
 // fresh from-scratch Sessions (a new Session fed the whole op history), from the joins/openings the
 // fixture authors by construction, and from which entities each from-scratch drawing references
 // (`data-entity`, spec/cli.md).
+// Only `Session` is named; the stats type is used through its `solids` / `views` fields (TASKS.md
+// T3.1 Details), so where the builder defines it does not matter.
 use bim_doc::{EntityId, Op, Value};
-use bim_model::{RecomputeStats, Session};
+use bim_model::Session;
 use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------- fixture
@@ -171,10 +173,12 @@ fn fixture() -> Vec<Op> {
 
 // ---------------------------------------------------------------- harness
 
-/// The incremental session under test plus the full op history (for from-scratch rebuilds).
+/// The incremental session under test plus the full op history (for from-scratch rebuilds) and
+/// the from-scratch snapshot of the current history (so each edit costs one fresh compile).
 struct Harness {
     live: Session,
     history: Vec<Op>,
+    scratch: Snapshot,
 }
 
 /// A from-scratch compile of a document: per-element (volume, area) and per-view SVG.
@@ -220,15 +224,19 @@ impl Harness {
         for v in VIEWS {
             live.add_view(v);
         }
-        Harness { live, history }
+        let scratch = fresh(&history);
+        Harness { live, history, scratch }
     }
 
-    fn apply(&mut self, ops: Vec<Op>) -> (RecomputeStats, Snapshot, Snapshot) {
-        let before = fresh(&self.history);
+    /// Applies `ops` to the live session; returns the reported recomputed solids and views, and
+    /// the from-scratch snapshots before and after the edit.
+    fn apply(&mut self, ops: Vec<Op>) -> (Vec<String>, Vec<String>, Snapshot, Snapshot) {
+        let before = self.scratch.clone();
         self.history.extend(ops.iter().cloned());
         let stats = self.live.apply(ops);
         let after = fresh(&self.history);
-        (stats, before, after)
+        self.scratch = after.clone();
+        (stats.solids, stats.views, before, after)
     }
 }
 
@@ -270,9 +278,9 @@ fn names(xs: &[&str]) -> BTreeSet<String> {
 /// - every view whose from-scratch drawing changed is in `views`;
 /// - a recomputed view draws (before or after the edit) at least one recomputed element.
 /// Then checks the live session equals the from-scratch compile.
-fn check_bounds(label: &str, h: &Harness, stats: &RecomputeStats, before: &Snapshot, after: &Snapshot) {
-    let solids = set_of(&stats.solids);
-    let views = set_of(&stats.views);
+fn check_bounds(label: &str, h: &Harness, so: &[String], vi: &[String], before: &Snapshot, after: &Snapshot) {
+    let solids = set_of(so);
+    let views = set_of(vi);
     for (e, (v1, a1)) in &after.solids {
         let changed = match before.solids.get(e) {
             Some((v0, a0)) => !close(*v0, *v1) || !close(*a0, *a1),
@@ -353,72 +361,72 @@ fn fixture_sanity_from_scratch() {
 #[test]
 fn wall_height_recomputes_wall_joined_walls_and_openings() {
     let mut h = Harness::new();
-    let (st, b, a) = h.apply(vec![set("WA", "height", num(3.5))]);
+    let (so, vi, b, a) = h.apply(vec![set("WA", "height", num(3.5))]);
     // WA, its L-joined neighbours WB and WD, the T-joined WT, and its opening OA. Nothing else.
-    assert_eq!(set_of(&st.solids), names(&["WA", "WB", "WD", "WT", "OA"]), "height edit on WA");
-    assert!(!set_of(&st.views).contains("section:30,-15,-5,-15"), "WA edit recomputed the L2-cluster section");
-    check_bounds("WA height", &h, &st, &b, &a);
+    assert_eq!(set_of(&so), names(&["WA", "WB", "WD", "WT", "OA"]), "height edit on WA");
+    assert!(!set_of(&vi).contains("section:30,-15,-5,-15"), "WA edit recomputed the L2-cluster section");
+    check_bounds("WA height", &h, &so, &vi, &b, &a);
 
     // The abutting wall of a T-join: WT and the through wall WA.
-    let (st, b, a) = h.apply(vec![set("WT", "height", num(2.5))]);
-    assert_eq!(set_of(&st.solids), names(&["WT", "WA"]), "height edit on WT");
-    check_bounds("WT height", &h, &st, &b, &a);
+    let (so, vi, b, a) = h.apply(vec![set("WT", "height", num(2.5))]);
+    assert_eq!(set_of(&so), names(&["WT", "WA"]), "height edit on WT");
+    check_bounds("WT height", &h, &so, &vi, &b, &a);
 
     // An isolated wall without joins or openings recomputes alone, and only views drawing it.
-    let (st, b, a) = h.apply(vec![set("WI", "height", num(3.3))]);
-    assert_eq!(set_of(&st.solids), names(&["WI"]), "height edit on isolated WI");
-    let views = set_of(&st.views);
+    let (so, vi, b, a) = h.apply(vec![set("WI", "height", num(3.3))]);
+    assert_eq!(set_of(&so), names(&["WI"]), "height edit on isolated WI");
+    let views = set_of(&vi);
     assert!(views.contains("section:-5,-1,30,-1"), "WI height change must redraw the section that shows it");
     assert!(!views.contains("section:30,-15,-5,-15"), "WI edit recomputed the L2-cluster section");
-    check_bounds("WI height", &h, &st, &b, &a);
+    check_bounds("WI height", &h, &so, &vi, &b, &a);
 }
 
 #[test]
 fn level_elevation_recomputes_elements_on_that_level() {
     let mut h = Harness::new();
-    let (st, b, a) = h.apply(vec![set("L2", "elevation", num(4.5))]);
-    let solids = set_of(&st.solids);
+    let (so, vi, b, a) = h.apply(vec![set("L2", "elevation", num(4.5))]);
+    let solids = set_of(&so);
     // Elements on L2: WE, S2, BM, and K1 (its top is L2). OE (opening hosted on WE) may re-run.
     let must = names(&["WE", "S2", "BM", "K1"]);
     let may = names(&["WE", "S2", "BM", "K1", "OE"]);
     assert!(must.is_subset(&solids), "L2 elevation edit: {solids:?} misses some of {must:?}");
     assert!(solids.is_subset(&may), "L2 elevation edit recomputed elements not on L2: {solids:?}");
-    let views = set_of(&st.views);
+    let views = set_of(&vi);
     assert!(views.contains("section:30,-15,-5,-15"), "L2 edit must redraw the L2-cluster section");
     assert!(!views.contains("section:-5,-1,30,-1"), "L2 edit recomputed the L1-cluster section");
-    check_bounds("L2 elevation", &h, &st, &b, &a);
+    check_bounds("L2 elevation", &h, &so, &vi, &b, &a);
 
-    let (st, b, a) = h.apply(vec![set("L1", "elevation", num(-0.5))]);
-    let solids = set_of(&st.solids);
+    let (so, vi, b, a) = h.apply(vec![set("L1", "elevation", num(-0.5))]);
+    let solids = set_of(&so);
     let must = names(&["WA", "WB", "WC", "WD", "WT", "WI", "S1", "K1"]);
     let may = names(&["WA", "WB", "WC", "WD", "WT", "WI", "S1", "K1", "OA", "OC"]);
     assert!(must.is_subset(&solids), "L1 elevation edit: {solids:?} misses some of {must:?}");
     assert!(solids.is_subset(&may), "L1 elevation edit recomputed elements not on L1: {solids:?}");
-    check_bounds("L1 elevation", &h, &st, &b, &a);
+    check_bounds("L1 elevation", &h, &so, &vi, &b, &a);
 }
 
 #[test]
 fn no_op_edit_recomputes_nothing() {
     let mut h = Harness::new();
-    let (st, b, a) = h.apply(vec![set("WA", "height", num(3.0))]);
-    assert!(st.solids.is_empty() && st.views.is_empty(), "no-op edit recomputed {:?} / {:?}", st.solids, st.views);
-    check_bounds("no-op", &h, &st, &b, &a);
-    let (st, _, _) = h.apply(vec![set("L2", "elevation", num(4.0)), set("OA", "width", num(0.9))]);
-    assert!(st.solids.is_empty() && st.views.is_empty(), "no-op edits recomputed {:?} / {:?}", st.solids, st.views);
-    let (st, _, _) = h.apply(vec![]);
-    assert!(st.solids.is_empty() && st.views.is_empty(), "empty apply recomputed {:?} / {:?}", st.solids, st.views);
+    let (so, vi, b, a) = h.apply(vec![set("WA", "height", num(3.0))]);
+    assert!(so.is_empty() && vi.is_empty(), "no-op edit recomputed {:?} / {:?}", so, vi);
+    check_bounds("no-op", &h, &so, &vi, &b, &a);
+    let (so, vi, _, _) = h.apply(vec![set("L2", "elevation", num(4.0)), set("OA", "width", num(0.9))]);
+    assert!(so.is_empty() && vi.is_empty(), "no-op edits recomputed {:?} / {:?}", so, vi);
+    let (so, vi, _, _) = h.apply(vec![]);
+    assert!(so.is_empty() && vi.is_empty(), "empty apply recomputed {:?} / {:?}", so, vi);
 }
 
 #[test]
 fn opening_edit_reaches_its_host() {
     let mut h = Harness::new();
-    let (st, b, a) = h.apply(vec![set("OC", "width", num(1.5))]);
-    let solids = set_of(&st.solids);
+    let (so, vi, b, a) = h.apply(vec![set("OC", "width", num(1.5))]);
+    let solids = set_of(&so);
     assert!(solids.contains("OC") && solids.contains("WC"), "opening edit must recompute OC and host WC: {solids:?}");
     for e in ["WI", "WE", "S2", "K1", "BM", "S1"] {
         assert!(!solids.contains(e), "opening edit on WC recomputed unrelated {e}");
     }
-    check_bounds("OC width", &h, &st, &b, &a);
+    check_bounds("OC width", &h, &so, &vi, &b, &a);
 }
 
 /// Small deterministic PRNG (64-bit LCG, fixed seed) so the judge needs no external crates.
@@ -470,7 +478,7 @@ fn random_edit_sequence_matches_from_scratch() {
                 None => vec![set("BM", "section_h", num(rng.range(0.3, 0.5)))],
             },
         };
-        let (st, b, a) = h.apply(ops);
-        check_bounds(&format!("random step {step}"), &h, &st, &b, &a);
+        let (so, vi, b, a) = h.apply(ops);
+        check_bounds(&format!("random step {step}"), &h, &so, &vi, &b, &a);
     }
 }

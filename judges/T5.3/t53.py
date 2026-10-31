@@ -1,14 +1,18 @@
 """T5.3 judge helper (oracle side). Builders must not edit judges/.
 
   python -I -B t53.py gen <outdir>
-      Authors <outdir>/source.ifc with ifcopenshell.api (independent producer; millimetre units,
-      nested local placements) and writes <outdir>/expected.json: per element its ULID id, expected
-      kind/props and its ifcopenshell.geom volume.
-  python -I -B t53.py check <outdir> <bim> <projectdir> <solve.json> <reexport.ifc>
-      Inspects the imported document with `bim show <projectdir> <id> --json`.
+      Authors <outdir>/source.ifc (IFC4) and <outdir>/source-2x3.ifc (IFC2X3, the same building) with
+      ifcopenshell.api (independent producer; millimetre units, nested local placements) and writes
+      <outdir>/expected.json / expected-2x3.json: per element its ULID id, expected kind/props and its
+      ifcopenshell.geom volume.
+  python -I -B t53.py check <outdir> <bim> <projectdir> <solve.json> <reexport.ifc> [<tag>]
+      Inspects the imported document with `bim show <projectdir> <id> --json`; <tag> ("" or "-2x3")
+      selects the source/expected pair.
 
-Id rule assumed (Spec gap, see report): an imported entity's id is the 26-character ULID spelling of
-the 128 bits of its IFC GlobalId, and export maps it back to the same GlobalId (T5.2 rule).
+Id rule (TASKS.md T5.3 Details): an imported entity's id is the 26-character ULID spelling of the
+128 bits of its IFC GlobalId, and export maps it back to the same GlobalId (T5.2 rule). Property-set
+values become props `<PsetName>.<PropName>`; an Opening's `kind` comes from its filling. Import reads
+IFC4 and IFC2X3 (spec/cli.md); exports are IFC4.
 """
 import json
 import math
@@ -24,6 +28,8 @@ import ifcopenshell.api.context
 import ifcopenshell.api.feature
 import ifcopenshell.api.geometry
 import ifcopenshell.api.material
+import ifcopenshell.api.owner
+import ifcopenshell.api.owner.settings
 import ifcopenshell.api.pset
 import ifcopenshell.api.root
 import ifcopenshell.api.spatial
@@ -37,6 +43,7 @@ from ifcopenshell import api
 CROCK = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 REL = 1e-4
 TOL = 1e-6  # metres, for coordinates resolved from placements
+OWNER_DEFAULTS = (ifcopenshell.api.owner.settings.get_user, ifcopenshell.api.owner.settings.get_application)
 
 
 def ulid_of_guid(g):
@@ -55,8 +62,18 @@ def volume(el):
 class Model:
     """ifcopenshell.api authoring with explicit, nested IfcLocalPlacements in millimetres."""
 
-    def __init__(self):
-        m = self.m = ifcopenshell.file(schema="IFC4")
+    def __init__(self, schema):
+        m = self.m = ifcopenshell.file(schema=schema)
+        if schema == "IFC2X3":  # IFC2X3 requires an IfcOwnerHistory on every IfcRoot
+            person = api.owner.add_person(m, identification="J", family_name="Judge")
+            org = api.owner.add_organisation(m, identification="J", name="Judge")
+            user = api.owner.add_person_and_organisation(m, person=person, organisation=org)
+            app = api.owner.add_application(m)
+            ifcopenshell.api.owner.settings.get_user = lambda f: user
+            ifcopenshell.api.owner.settings.get_application = lambda f: app
+        else:
+            ifcopenshell.api.owner.settings.get_user = OWNER_DEFAULTS[0]
+            ifcopenshell.api.owner.settings.get_application = OWNER_DEFAULTS[1]
         self.proj = api.root.create_entity(m, ifc_class="IfcProject", name="T5.3 source")
         api.unit.assign_unit(m)  # millimetres
         ctx = api.context.add_context(m, context_type="Model")
@@ -80,8 +97,17 @@ class Model:
 
 
 def gen(out):
-    md = Model()
+    gen_model(out, "IFC4", "", 53)
+    gen_model(out, "IFC2X3", "-2x3", 54)
+
+
+def gen_model(out, schema, tag, seed):
+    md = Model(schema)
     m, body = md.m, md.body
+
+    def rect_profile(xdim, ydim):  # explicit Position: required in IFC2X3, optional in IFC4
+        return m.createIfcRectangleProfileDef("AREA", None, m.createIfcAxis2Placement2D(
+            m.createIfcCartesianPoint((0.0, 0.0))), xdim, ydim)
     site = api.root.create_entity(m, ifc_class="IfcSite", name="Site")
     bld = api.root.create_entity(m, ifc_class="IfcBuilding", name="Building")
     api.aggregate.assign_object(m, relating_object=md.proj, products=[site])
@@ -157,14 +183,14 @@ def gen(out):
 
     co = api.root.create_entity(m, ifc_class="IfcColumn", name="CO")
     api.spatial.assign_container(m, relating_structure=storeys["S0"], products=[co])
-    prof = m.createIfcRectangleProfileDef("AREA", None, None, 300.0, 400.0)
+    prof = rect_profile(300.0, 400.0)
     api.geometry.assign_representation(m, product=co, representation=api.geometry.add_profile_representation(
         m, context=body, profile=prof, depth=3.0))
     md.place(co, storeys["S0"], (3.0, 4.0, 0.0))
 
     be = api.root.create_entity(m, ifc_class="IfcBeam", name="BE")
     api.spatial.assign_container(m, relating_structure=storeys["S1"], products=[be])
-    prof = m.createIfcRectangleProfileDef("AREA", None, None, 200.0, 400.0)
+    prof = rect_profile(200.0, 400.0)
     api.geometry.assign_representation(m, product=be, representation=api.geometry.add_profile_representation(
         m, context=body, profile=prof, depth=7.0))
     # extrusion along world +x; profile x along world +y (width 0.2), profile y up (depth 0.4); centred
@@ -186,12 +212,13 @@ def gen(out):
     api.geometry.assign_representation(m, product=wf, representation=rep)
     md.place(wf, storeys["S0"], (14.0, 6.0, 0.0))
 
-    rng = random.Random(53)  # fixed GlobalIds: deterministic fixtures
+    rng = random.Random(seed)  # fixed GlobalIds: deterministic fixtures
     for r in m.by_type("IfcRoot"):
         r.GlobalId = ifcopenshell.guid.compress(format(rng.getrandbits(128), "032x"))
-    m.write(f"{out}/source.ifc")
+    m.write(f"{out}/source{tag}.ifc")
     # Re-open: expectations come from the written file as ifcopenshell reads it.
-    f = ifcopenshell.open(f"{out}/source.ifc")
+    f = ifcopenshell.open(f"{out}/source{tag}.ifc")
+    assert f.schema == schema, f.schema
     W = lambda e: Model.world(None, f.by_guid(e.GlobalId))  # noqa: E731
     E = exp["elements"]
     for name, (w, length, t, height) in walls.items():
@@ -232,7 +259,7 @@ def gen(out):
     assert abs(E["WB"]["volume"] - (4.0 * 2.7 - 1.0 * 1.2) * 0.25) < 1e-9, E["WB"]["volume"]
     assert abs(E["SL0"]["volume"] - 18.0 * 0.25) < 1e-9
     assert np.allclose(E["WA"]["p1"], [100.0, 50.0]) and abs(E["SL1"]["boundary"][2][1] - 56.0) < 1e-9
-    json.dump(exp, open(f"{out}/expected.json", "w"), indent=1)
+    json.dump(exp, open(f"{out}/expected{tag}.json", "w"), indent=1)
 
 
 class Fail(Exception):
@@ -248,8 +275,8 @@ def close(a, b, rel=REL, absol=TOL):
     return abs(a - b) <= max(rel * max(abs(a), abs(b)), absol)
 
 
-def check(out, bim, pdir, solve_path, reexport):
-    exp = json.load(open(f"{out}/expected.json"))
+def check(out, bim, pdir, solve_path, reexport, tag=""):
+    exp = json.load(open(f"{out}/expected{tag}.json"))
     E, L = exp["elements"], exp["levels"]
 
     def show(eid, what):
@@ -392,7 +419,8 @@ def check(out, bim, pdir, solve_path, reexport):
         g = ifcopenshell.open(reexport)
     except Exception as ex:  # noqa: BLE001
         raise Fail(f"re-exported IFC unreadable: {ex}")
-    src = ifcopenshell.open(f"{out}/source.ifc")
+    need(g.schema == "IFC4", f"re-export schema is {g.schema}, want IFC4 (spec/cli.md: exports are IFC4)")
+    src = ifcopenshell.open(f"{out}/source{tag}.ifc")
     for cls in ("IfcBuildingStorey", "IfcSlab", "IfcColumn", "IfcBeam", "IfcSpace", "IfcDoor", "IfcWindow"):
         need(len(g.by_type(cls)) == len(src.by_type(cls)), f"re-export has {len(g.by_type(cls))} {cls}, source {len(src.by_type(cls))}")
     need(len(g.by_type("IfcRelVoidsElement")) >= 2, "re-export lost the wall openings")
@@ -416,7 +444,7 @@ def main():
         gen(sys.argv[2])
         return 0
     try:
-        check(*sys.argv[2:7])
+        check(*sys.argv[2:8])
     except Fail as e:
         print(str(e))
         return 1

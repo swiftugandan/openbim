@@ -13,9 +13,15 @@ cargo build -q -p bim-cli || fail "cargo build -p bim-cli failed"
 bim="$CARGO_TARGET_DIR/debug/bim"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-run() { # run <what> <cmd...>: must exit 0; stdout in $tmp/out
+timed() { # timed <seconds> <cmd...>: run with a timeout (macOS has no `timeout`); exit 124 on expiry
+  "$py" -I -S -c 'import subprocess,sys
+try: sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired: sys.exit(124)' "$@"
+}
+run() { # run <what> <cmd...>: must exit 0 within 60 s; stdout in $tmp/out
   local what=$1; shift
-  set +e; "$@" >"$tmp/out" 2>"$tmp/err"; local rc=$?; set -e
+  set +e; timed 60 "$@" >"$tmp/out" 2>"$tmp/err"; local rc=$?; set -e
+  [ "$rc" = 124 ] && fail "$what timed out after 60 s"
   [ "$rc" = 0 ] || fail "$what exited $rc: $(head -c 400 "$tmp/err")"
 }
 t56() { "$py" -I -B judges/T5.6/t56.py "$@"; }
@@ -30,8 +36,9 @@ run "bim bcf create #1" "$bim" bcf "$tmp/P" create --title "Crack above door" --
 tail -n 1 "$tmp/out" | tr -d '[:space:]' > "$tmp/g1"; echo >> "$tmp/g1"
 run "bim bcf create #2" "$bim" bcf "$tmp/P" create --title "Column too close to wall W2" --entity "$(id C1)" "$(id W2)"
 tail -n 1 "$tmp/out" | tr -d '[:space:]' >> "$tmp/g1"; echo >> "$tmp/g1"
+# BCF 3.0 shared-types.xsd restricts Guid to lowercase hex, hence the lowercase pattern.
 grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' <(head -n 1 "$tmp/g1") \
-  || fail "bim bcf create should print the new topic's Guid, got: $(head -n 1 "$tmp/g1")"
+  || fail "bim bcf create should print the new topic's Guid (lowercase UUID) as its last stdout line, got: $(head -n 1 "$tmp/g1")"
 run "bim bcf export (P)" "$bim" bcf "$tmp/P" export "$tmp/p.bcfzip"
 out=$(t56 validate "$tmp/p.bcfzip") || fail "created topics: $out"
 out=$(t56 created "$tmp" "$tmp/p.bcfzip" "$tmp/g1") || fail "$out"
@@ -55,9 +62,9 @@ out=$(t56 same "$tmp/p.bcfzip" "$tmp/r.bcfzip") || fail "import(export(created))
 # 4. Invalid input exits 2 and changes nothing.
 run "bim hash" "$bim" hash "$tmp/R"; h=$(cat "$tmp/out")
 printf 'not a zip' > "$tmp/bad.bcfzip"
-set +e; "$bim" bcf "$tmp/R" import "$tmp/bad.bcfzip" >/dev/null 2>&1; rc=$?; set -e
+set +e; timed 60 "$bim" bcf "$tmp/R" import "$tmp/bad.bcfzip" >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" = 2 ] || fail "import of a non-zip bcfzip exited $rc, want 2"
-set +e; "$bim" bcf "$tmp/R" create --title "ghost" --entity no-such-entity >/dev/null 2>&1; rc=$?; set -e
+set +e; timed 60 "$bim" bcf "$tmp/R" create --title "ghost" --entity no-such-entity >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" = 2 ] || fail "bcf create with a missing entity exited $rc, want 2"
 run "bim hash" "$bim" hash "$tmp/R"
 [ "$(cat "$tmp/out")" = "$h" ] || fail "rejected bcf commands changed the document"

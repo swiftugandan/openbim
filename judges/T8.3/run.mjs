@@ -33,8 +33,13 @@ try {
   page.setDefaultTimeout(10_000);
   watch(page, "light");
   await page.goto(URL_);
-  const status = await ready(page, "initial load");
-  check(/fps/i.test(status) && /\d/.test(status), `status-bar should show the backend and fps, shows '${status.trim()}'`);
+  await ready(page, "initial load");
+  // "fps" with a number that is not the digit of "webgl2" (the counter may need a few frames).
+  const status = await until(async () => {
+    const t = await page.locator(tid("status-bar")).first().innerText();
+    return /fps/i.test(t) && /\d/.test(t.replace(/webgl2|webgpu/gi, "")) ? t : null;
+  }, 5000, 250);
+  check(status, `status-bar should show the backend and an fps number, shows '${(await page.locator(tid("status-bar")).first().innerText()).trim()}'`);
   const lightLum = meanLum(decodePng(await page.screenshot()));
 
   // ------------------------------------------------------------------ layout and test hooks
@@ -106,12 +111,24 @@ try {
   const P3 = await view("sheet-2d"), V3 = await view("viewport-3d");
   check(diff(V2, V3).length > nV + 30, "editing prop-height to 0.3 m did not update viewport-3d");
   check(diff(P2, P3).length > nP + 10, "editing prop-height to 0.3 m (below the plan cut) did not update sheet-2d");
+  // Re-select wall 1 when the panel lost the selection (undo/redo, reload): a 2D click on its plan
+  // footprint first; if that misses (a 0.3 m wall sits below the plan cut and may be drawn as
+  // projection only), a 3D click on its pixels nearest to where it was first picked.
   const selectW1 = async () => {
     if ((await propValue(page, "height")) !== null) return;
+    await page.keyboard.press("Escape");
     await page.locator(tid("tool-select")).first().click();
     await reveal(page, "sheet-2d");
     await clickIn(page, "sheet-2d", W1PT);
-    await until(() => propValue(page, "height"), 3000);
+    if (await until(() => propValue(page, "height"), 2500)) return;
+    await reveal(page, "viewport-3d");
+    await park(page);
+    const px = diff(V0, await shot(page, "viewport-3d"));
+    check(px.length > 0, "cannot locate wall 1 in viewport-3d to re-select it");
+    let best = px[0], bd = Infinity;
+    for (const p of px) { const d = Math.hypot(p[0] - V3D[0], p[1] - V3D[1]); if (d < bd) { bd = d; best = p; } }
+    await clickIn(page, "viewport-3d", best);
+    await until(() => propValue(page, "height"), 2500);
   };
   const expectHeight = async (want, what) => {
     await selectW1();
@@ -172,9 +189,8 @@ try {
   await page.keyboard.press("Escape");
   await page.reload();
   await ready(page, "second reload");
-  await page.locator(tid("tool-select")).first().click();
-  await reveal(page, "sheet-2d");
-  await clickIn(page, "sheet-2d", W1PT);
+  await park(page);
+  await selectW1();
   const hp = await until(() => propValue(page, "height"), 4000);
   check(hp !== null && Math.abs(num(hp) - 0.3) < 1e-6, `after reload wall 1 has prop-height ${hp}, want 0.3 (edit not persisted)`);
 

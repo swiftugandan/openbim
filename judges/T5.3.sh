@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Verification for T5.3: `bim import` of an IFC4 file authored at run time with ifcopenshell.api
+# Verification for T5.3: `bim import` of IFC4 and IFC2X3 files authored at run time with ifcopenshell.api
 # (independent producer): kinds, resolved placements, props, property sets, counts and volumes,
-# and import -> export volume conservation, all against ifcopenshell.
+# and import -> export (IFC4) volume conservation, all against ifcopenshell.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/.build/judges"
@@ -29,8 +29,14 @@ set +e; "$bim" import "$tmp/P" "$tmp/truncated.ifc" >/dev/null 2>&1; rc=$?; set 
 run "bim hash" "$bim" hash "$tmp/P"
 [ "$(cat "$tmp/out")" = "$h0" ] || fail "rejected import changed the document"
 
-run "bim import source.ifc" "$bim" import "$tmp/P" "$tmp/source.ifc"
-run "bim solve --trade arch" "$bim" solve "$tmp/P" --trade arch --json; cp "$tmp/out" "$tmp/solve.json"
-run "bim export --format ifc" "$bim" export "$tmp/P" --format ifc --out "$tmp/reexport.ifc"
-out=$("$py" -I -B judges/T5.3/t53.py check "$tmp" "$bim" "$tmp/P" "$tmp/solve.json" "$tmp/reexport.ifc") || fail "$out"
+# The same building as IFC4 (source.ifc, project P) and as IFC2X3 (source-2x3.ifc, project P2).
+for tag in "" "-2x3"; do
+  p="$tmp/P${tag:+2}"
+  [ -n "$tag" ] && run "bim init (IFC2X3)" "$bim" init "$p"
+  run "bim import source$tag.ifc" "$bim" import "$p" "$tmp/source$tag.ifc"
+  run "bim solve --trade arch ($p)" "$bim" solve "$p" --trade arch --json; cp "$tmp/out" "$tmp/solve$tag.json"
+  run "bim export --format ifc ($p)" "$bim" export "$p" --format ifc --out "$tmp/reexport$tag.ifc"
+  out=$("$py" -I -B judges/T5.3/t53.py check "$tmp" "$bim" "$p" "$tmp/solve$tag.json" "$tmp/reexport$tag.ifc" "$tag") \
+    || fail "source$tag.ifc: $out"
+done
 echo "T5.3 judge: all checks passed"

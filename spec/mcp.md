@@ -4,7 +4,8 @@ Frozen contract. `bim-mcp <dir>` speaks the Model Context Protocol (protocol ver
 over stdio, JSON-RPC 2.0, one message per line. It must interoperate with the official
 `@modelcontextprotocol/sdk` client (`initialize`, `tools/list`, `tools/call`, `resources/list`,
 `resources/read`). Every tool declares a JSON Schema `inputSchema` and returns `structuredContent`
-(plus a text rendering) matching the shapes below. Tool errors use `isError: true`, never a crash.
+(plus a text rendering) matching the shapes below. Tool errors use `isError: true`, never a crash. Each tool's `inputSchema` marks every input field shown
+without `?` as `required` and types `clearance` as a number.
 
 ## Tools
 

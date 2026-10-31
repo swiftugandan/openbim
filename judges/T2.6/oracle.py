@@ -264,11 +264,14 @@ def closed_form(sc, got):
 
 def check(expected, outputs):
     got = {}
+    errs = []
     for line in outputs:
         if line.strip():
-            o = json.loads(line)
-            got[o["case"]] = o
-    errs = []
+            try:  # NaN/inf coordinates or malformed lines are failures, not crashes
+                o = json.loads(line, parse_constant=lambda c: float("nan"))
+                got[o["case"]] = o
+            except (ValueError, KeyError, TypeError) as e:
+                errs.append(f"driver output line is not a scene record ({e}): {line[:80]}")
     for name, d, up, solids in expected:
         if name not in got:
             errs.append(f"{name}: no output")

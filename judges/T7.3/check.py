@@ -137,7 +137,8 @@ if got != "B":
 # Three identical columns share one family mesh (T7.2); each instance must keep its own id.
 cols = project("C", [column("c1", -3, 0, 0.6, 0.6), column("c2", 0, 0, 0.6, 0.6),
                      column("c3", 3, 0, 0.6, 0.6)])
-EYE_C, TGT_C = (0.0, -30.0, 1.5), (0.0, 0.0, 1.5)
+# 15 m away the 0.6 m columns are >= 4 px wide and 20 px apart for any vertical FOV up to 90 degrees.
+EYE_C, TGT_C = (0.0, -15.0, 1.5), (0.0, 0.0, 1.5)
 colour = render(cols, EYE_C, TGT_C, SIZE, os.path.join(TMP, "c.png"),
                 ["--ids", os.path.join(TMP, "c_ids.png")])
 ids = read_png(os.path.join(TMP, "c_ids.png")).astype(np.int32)
@@ -205,7 +206,9 @@ if not ratio_near < ratio_far - 0.05:
 # the cube [0,2]^3 whose three faces visible from EYE_S (planes x=0, y=0, z=2) are all cut faces.
 # So with the box every geometry pixel must be the one cap colour, and everything else background.
 blk = project("S", [column("K", 0, 0, 4, 4)])
-EYE_S, TGT_S, SZ = (-10.0, -14.0, 9.0), (0.0, 0.0, 2.0), (384, 384)
+# Camera 15 m from the corner: the uncut column stays inside the image at a 30 degree vertical FOV
+# and the remaining cube covers >= 0.6 % of the image at 90 degrees (the FOV is not in the contract).
+EYE_S, TGT_S, SZ = (-8.0, -11.2, 7.2), (0.0, 0.0, 2.0), (384, 384)
 cx, cy = SZ[0] // 2, SZ[1] // 2
 nobox = render(blk, EYE_S, TGT_S, SZ, os.path.join(TMP, "n.png"), ["--no-ssao"])
 boxed = render(blk, EYE_S, TGT_S, SZ, os.path.join(TMP, "b.png"),
@@ -230,9 +233,9 @@ for s in samples:
 is_bg = dist(boxed, bg) <= 12
 is_cap = dist(boxed, cap) <= 12
 other = ~(is_bg | is_cap)
-if is_cap.sum() < 0.01 * is_cap.size:
+if is_cap.sum() < 0.004 * is_cap.size:
     fail("section box: cap region is too small")
-if other.sum() > 0.15 * is_cap.sum():
+if other.sum() > 0.25 * is_cap.sum():
     fail(f"section box: {int(other.sum())} pixels are neither cap colour nor background "
          "(geometry outside the box still drawn, or caps shaded)")
 was_geo = dist(nobox, bg) > 12

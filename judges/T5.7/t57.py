@@ -132,10 +132,12 @@ def shipped_rules(root):
             got[key] = r
         need(set(got) == set(want), f"pack {name}: rules {sorted(got)}, spec/plugins.md lists {sorted(want)}")
         for key, lim in want.items():
+            # 1e-9: spec/plugins.md writes the ramp limit as 1:12, so a decimal spelling needs >= 10 digits
             gl = got[key].get("limit")
             ok = (isinstance(gl, list) and isinstance(lim, list) and len(gl) == 2 and
-                  all(abs(a - b) <= 1e-12 for a, b in zip(gl, lim))) or \
-                 (isinstance(gl, (int, float)) and not isinstance(lim, list) and abs(gl - lim) <= 1e-12)
+                  all(isinstance(a, (int, float)) and abs(a - b) <= 1e-9 for a, b in zip(gl, lim))) or \
+                 (isinstance(gl, (int, float)) and not isinstance(gl, bool) and not isinstance(lim, list)
+                  and abs(gl - lim) <= 1e-9)
             need(ok, f"pack {name}: {key} limit {gl}, spec {lim}")
         out[name] = {key: (r["id"], r["limit"]) for key, r in got.items()}
     return out

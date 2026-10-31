@@ -7,15 +7,28 @@ import path from "node:path";
 import { oracle } from "../lib/oracle.mjs";
 
 const [bim, bimMcp, dir, tmp] = process.argv.slice(2);
-const fail = (msg) => { console.error(`JUDGE FAIL: ${msg}`); process.exit(1); };
+let transport = null; // set once the server is spawned, so a failing exit never orphans it
+const fail = (msg) => {
+  console.error(`JUDGE FAIL: ${msg}`);
+  if (transport?.pid) { try { process.kill(transport.pid, "SIGKILL"); } catch { /* already gone */ } }
+  process.exit(1);
+};
 setTimeout(() => fail("timed out after 50 s"), 50_000).unref();
 
 const { Client } = await oracle("@modelcontextprotocol/sdk/client/index.js");
 const { StdioClientTransport } = await oracle("@modelcontextprotocol/sdk/client/stdio.js");
 const AjvMod = await oracle("ajv");
+const Ajv2019Mod = await oracle("ajv/dist/2019.js");
 const Ajv2020Mod = await oracle("ajv/dist/2020.js");
 const Ajv = AjvMod.Ajv ?? AjvMod.default;
+const Ajv2019 = Ajv2019Mod.Ajv2019 ?? Ajv2019Mod.default;
 const Ajv2020 = Ajv2020Mod.Ajv2020 ?? Ajv2020Mod.default;
+// The draft a schema declares picks the validator; no `$schema` means draft-07 (Ajv's default).
+const ajvFor = (schema) => {
+  const uri = String(schema.$schema ?? "");
+  const Cls = uri.includes("2020-12") ? Ajv2020 : uri.includes("2019-09") ? Ajv2019 : Ajv;
+  return new Cls({ strict: false });
+};
 
 // ---------- helpers ----------
 function cli(args, okCodes = [0]) {
@@ -48,7 +61,7 @@ function close(a, b, where, rel = 1e-9) {
 const textOf = (res) => (res.content ?? []).filter((c) => c.type === "text").map((c) => c.text);
 
 // ---------- connect ----------
-const transport = new StdioClientTransport({ command: bimMcp, args: [dir], stderr: "pipe" });
+transport = new StdioClientTransport({ command: bimMcp, args: [dir], stderr: "pipe" });
 let stderr = "";
 transport.stderr?.on("data", (d) => { stderr += d; });
 const client = new Client({ name: "openbim-judge", version: "1.0.0" });
@@ -101,9 +114,8 @@ try {
     if (!t) fail(`tools/list lacks tool ${name}`);
     const s = t.inputSchema;
     if (!s || s.type !== "object") fail(`${name}.inputSchema is not an object schema`);
-    const ajv = String(s.$schema ?? "").includes("2020-12") ? new Ajv2020({ strict: false }) : new Ajv({ strict: false });
     let validate;
-    try { validate = ajv.compile(s); } catch (e) { fail(`${name}.inputSchema is not valid JSON Schema: ${e.message}`); }
+    try { validate = ajvFor(s).compile(s); } catch (e) { fail(`${name}.inputSchema is not valid JSON Schema: ${e.message}`); }
     if (!validate(samples.valid)) fail(`${name}.inputSchema rejects a valid input ${JSON.stringify(samples.valid)}`);
     if (samples.missing && validate(samples.missing))
       fail(`${name}.inputSchema accepts input missing a required field: ${JSON.stringify(samples.missing)}`);
@@ -228,9 +240,10 @@ flows(A, B) :- feeds(A, B).
   const out = path.join(tmp, "r.svg");
   cli(["export", dir, "--format", "svg", "--view", "plan:L1@1.2", "--out", out]);
   if (svgRes.text.trim() !== fs.readFileSync(out, "utf8").trim()) fail("bim://view/plan:L1@1.2.svg differs from bim export");
-  const clashRes = await read("bim://clash/matrix");
-  if (clashRes.mimeType !== "application/json") fail(`bim://clash/matrix mimeType ${clashRes.mimeType}`);
-  close(JSON.parse(clashRes.text), clashCli, "bim://clash/matrix vs bim clash --json");
+  const clashRes = await read("bim://clash/matrix"); // spec pins its JSON, not a mimeType
+  let clashJson;
+  try { clashJson = JSON.parse(clashRes.text); } catch { fail("bim://clash/matrix is not JSON"); }
+  close(clashJson, clashCli, "bim://clash/matrix vs bim clash --json");
 
   // ---------- malformed input: isError, never a crash ----------
   const bad = [

@@ -13,13 +13,15 @@ Checks
      reactions, member envelopes and utilization against PyNite (0.1 %), PyNite first checked against a
      closed-form cantilever.
 
-Model conventions assumed (see the T4.5 Spec gaps in the judge report): member local x from the start
+Model conventions (TASKS.md T4.5 Details, spec/cli.md `solve --trade struct`): member local x from the start
 ((x1,y1) for a Beam, base for a Column); reference vector +z for Beams, +y for Columns (local z = unit
 component of the reference vector orthogonal to x, local y = z x x); section_b along local y, section_h
 along local z; A = b h, Iy = b h^3/12, Iz = h b^3/12, J = a c^3 (1/3 - 0.21 (c/a)(1 - c^4/(12 a^4)))
 with a >= c the sides, Wy = b h^2/6, Wz = h b^2/6; Euler-Bernoulli members; no self-weight; envelopes are
 [min, max] over stations and combinations of the internal actions exerted on the part from the start to the
-station by the rest (tension positive); utilization is the maximum over stations and combinations.
+station by the rest (tension positive, the T4.4 convention); utilization is the maximum over stations and
+combinations; a Beam's axis is at level elevation - z_offset - section_h/2; a split element is reported as
+<id>#1..<id>#k from its start.
 """
 import json
 import math
@@ -332,7 +334,7 @@ def build_c():
     # Secondary beam on L1 framing into the midspans of BX100 and BX110: splits both.
     ents.append(beam("SB", "L1", 2.5, 0.0, 2.5, 4.0, *sec_s))
     beams.append(("SB", (2.5, 0.0, 3.5), (2.5, 4.0, 3.5), *sec_s))
-    # Pinned support under column C100 (overrides the default fixed base).
+    # Pinned support under column C200's base at (10, 0, 0) (overrides the default fixed base).
     ents.append(("SUP", "Support", {"x": 10.0, "y": 0.0, "z": 0.0, "ux": True, "uy": True, "uz": True,
                                      "rx": False, "ry": False, "rz": False}))
     loads = [  # (id, point, [fx fy fz mx my mz], case)

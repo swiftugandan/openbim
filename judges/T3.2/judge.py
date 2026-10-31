@@ -62,7 +62,10 @@ def integrity(d):
     if not os.path.isfile(db):
         fail(f"{db} does not exist")
     try:
-        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+        # A read-write connection (the judge still writes nothing): after a process was killed
+        # mid-transaction the file carries a hot rollback journal, and SQLite can only recover it
+        # on a writable connection (a `mode=ro` open fails with SQLITE_READONLY_ROLLBACK).
+        con = sqlite3.connect(db, timeout=10)
         rows = con.execute("PRAGMA integrity_check").fetchall()
         con.close()
     except sqlite3.Error as e:

@@ -9,19 +9,14 @@ for c in bim-incr bim-model bim-draw; do
   [ -f "crates/$c/Cargo.toml" ] || fail "crate crates/$c is missing"
 done
 
-# bim-model and bim-draw must compute through bim-incr (a direct dependency of each).
-meta=$(cargo metadata -q --format-version 1 --no-deps) || fail "cargo metadata failed on the workspace"
-printf '%s' "$meta" | .oracles/py/bin/python -I -c '
-import json, sys
-pk = {p["name"]: p for p in json.load(sys.stdin)["packages"]}
-for name in ("bim-model", "bim-draw"):
-    if name not in pk:
-        sys.exit(f"{name} is not a workspace member")
-    deps = {d["name"] for d in pk[name]["dependencies"] if d.get("kind") in (None, "normal")}
-    if "bim-incr" not in deps:
-        sys.exit(f"{name} does not depend on bim-incr")
-' || fail "dependency structure (see above)"
+# bim-model and bim-draw must compute through bim-incr (a direct normal dependency of each).
+for c in bim-model bim-draw; do
+  deps=$(cargo tree -q -p "$c" --depth 1 -e normal --prefix none 2>&1) || fail "cargo tree -p $c failed: $deps"
+  printf '%s\n' "$deps" | grep -q '^bim-incr ' || fail "$c does not depend on bim-incr (cargo tree -p $c --depth 1 -e normal)"
+done
 
-cargo test -q --manifest-path judges/T3.1/Cargo.toml -- --test-threads=4 \
-  || fail "judge tests in judges/T3.1/tests/judge.rs failed (see above)"
+# The tests rebuild the fixture from scratch after every edit (many compiles with HLR), so they run
+# in release; the alarm keeps a hang in the code under test from hanging the judge.
+perl -e 'alarm 600; exec @ARGV' cargo test -q --release --manifest-path judges/T3.1/Cargo.toml -- --test-threads=4 \
+  || fail "judge tests in judges/T3.1/tests/judge.rs failed or timed out (see above)"
 echo "T3.1 judge: all checks passed"

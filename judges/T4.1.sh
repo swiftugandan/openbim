@@ -101,7 +101,7 @@ perl -e 'select undef,undef,undef,0.3'
 run 30 "$bim" hash "$A"; [ "$(cat "$tmp/out")" = "$h0" ] || fail "running plugins changed the document hash"
 printf 'not a wasm component' > "$tmp/wasm/garbage.wasm"
 run 60 "$bim" validate "$A" --standard "$tmp/wasm/garbage.wasm" --json
-[ "$rc" = 2 ] || [ "$rc" = 3 ] || fail "garbage plugin file: exit $rc, want 2 or 3"
+expect_rc 2 "a file that is not a valid rule-set component (spec/plugins.md: exit 2)"
 run 30 "$bim" validate "$A" --standard no-such-pack-name --json
 expect_rc 2 "unknown --standard"
 run 30 "$bim" solve "$A" --trade no-such-trade --json

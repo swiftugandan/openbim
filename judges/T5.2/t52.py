@@ -6,9 +6,10 @@
   python -I -B t52.py check <outdir> <a.ifc> <solve.json> <b.ifc> <edited.ifc> <edited-solve.json>
       a.ifc: export of ops.json; b.ifc: export of ops-permuted.json; edited.*: after edit.json.
 
-GlobalId rule assumed (Spec gap, see report): an entity's IfcRoot.GlobalId is
-ifcopenshell.guid.compress(<its 128-bit EntityId as 32 lowercase hex digits>); fixture ids are
-ULIDs, so the judge knows each EntityId.
+GlobalId rule (TASKS.md T5.2 Details): an entity's IfcRoot.GlobalId is
+ifcopenshell.guid.compress(<its 128-bit EntityId as 32 lowercase hex digits>); storeys carry their
+Level's GlobalId and an IfcOpeningElement its Opening's. Fixture ids are ULIDs, so the judge knows
+each EntityId.
 """
 import json
 import math

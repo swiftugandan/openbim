@@ -6,6 +6,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/.build/judges"
 fail() { echo "JUDGE FAIL: $*" >&2; exit 1; }
+py=.oracles/py/bin/python
+[ -x "$py" ] || fail "missing oracle $py (run loop/setup.sh)"
 cargo build -q --release -p bim-cli || fail "cargo build --release -p bim-cli failed"
 bim="$CARGO_TARGET_DIR/release/bim"
 # Criterion benches for compile, incremental edit, raycast and culling must exist and build.
@@ -14,5 +16,5 @@ list=$(cargo bench -q -p bim-bench -- --list 2>"$CARGO_TARGET_DIR/t7.5-bench.err
 for w in compile incremental raycast cull; do
   grep -qi "$w.*: bench" <<<"$list" || fail "no criterion benchmark whose id contains '$w' (cargo bench -p bim-bench -- --list)"
 done
-.oracles/py/bin/python -I judges/T7.5/check.py "$bim"
+"$py" -I -B judges/T7.5/check.py "$bim"
 echo "T7.5 judge: all checks passed"

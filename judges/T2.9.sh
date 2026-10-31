@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Verification for T2.9: export the same views as SVG, DXF and PDF with the real `bim`; check the
 # DXF with ezdxf (AC1027, audit, layers/lineweights/DASHED, HATCH, dimension text, XDATA OPENBIM)
-# and the PDF with pypdf (1.7, one OCG per layer, line widths in points, dimension text), and
-# that both carry the same stroke geometry as the SVG export (T2.8).
+# and the PDF with pypdf (1.7, one page, one OCG per layer, line widths in points, dimension text),
+# and that both carry the same stroke geometry as the SVG export (T2.8).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/.build/judges"
@@ -14,9 +14,14 @@ j=judges/T2.9
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-run() { # run <label> <cmd...>: must exit 0
+[ -x "$py" ] || fail "missing oracle $py (run loop/setup.sh)"
+
+# Every subprocess runs under an alarm so a hang in the code under test cannot hang the judge.
+to() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
+run() { # run <label> <cmd...>: must exit 0 within 120 s
   local label=$1; shift
-  "$@" >"$tmp/out" 2>"$tmp/err" || fail "$label exited $?: $(head -c 400 "$tmp/err")"
+  to 120 "$@" >"$tmp/out" 2>"$tmp/err" || fail "$label exited $? (142 = timeout): $(head -c 400 "$tmp/err")"
 }
 
 check_view() { # check_view <n> <view> <ops files...>
@@ -26,17 +31,17 @@ check_view() { # check_view <n> <view> <ops files...>
       "$bim" export "$tmp/P" --format "$fmt" --view "$view" --out "$tmp/v$n.$fmt"
     [ -s "$tmp/v$n.$fmt" ] || fail "export --format $fmt --view $view wrote nothing"
   done
-  "$py" -I -B "$j/check_cad.py" "$tmp/v$n.svg" "$tmp/v$n.dxf" "$tmp/v$n.pdf" "$view" "$@" >"$tmp/chk" 2>&1 || true
+  to 300 "$py" -I -B "$j/check_cad.py" "$tmp/v$n.svg" "$tmp/v$n.dxf" "$tmp/v$n.pdf" "$view" "$@" >"$tmp/chk" 2>&1 || true
   cat "$tmp/chk" >&2
   grep -q '^JUDGE FAIL' "$tmp/chk" && exit 1
-  grep -q '^T2.9 check' "$tmp/chk" || fail "oracle check for $view did not complete"
+  grep -q '^T2.9 check' "$tmp/chk" || fail "oracle check for $view did not complete (crash or timeout)"
 }
 
 run "bim init" "$bim" init "$tmp/P"
 run "bim apply drawing.ops.json" "$bim" apply "$tmp/P" "$j/drawing.ops.json"
 for bad in "plan:NOPE@1.2" "elevation:q"; do
   for fmt in dxf pdf; do
-    set +e; "$bim" export "$tmp/P" --format "$fmt" --view "$bad" --out "$tmp/bad.$fmt" >/dev/null 2>&1; rc=$?; set -e
+    set +e; to 120 "$bim" export "$tmp/P" --format "$fmt" --view "$bad" --out "$tmp/bad.$fmt" >/dev/null 2>&1; rc=$?; set -e
     [ "$rc" = 2 ] || fail "export --format $fmt --view $bad exited $rc, want 2"
   done
 done

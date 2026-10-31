@@ -119,11 +119,9 @@ def check_dxf(path, items, ents, dims, tag):
             lay = doc.layers.get(L)
             if lay.dxf.lineweight != LW[L]:
                 fail(f"{tag} DXF layer {L} lineweight {lay.dxf.lineweight}, want {LW[L]} (1/100 mm)")
-    if "HIDDEN" in used:
-        if "DASHED" not in doc.linetypes:
-            fail(f"{tag} DXF has no DASHED linetype")
-        if doc.layers.get("HIDDEN").dxf.linetype.upper() != "DASHED":
-            fail(f"{tag} DXF layer HIDDEN linetype {doc.layers.get('HIDDEN').dxf.linetype}, want DASHED")
+    hidden_layer_lt = doc.layers.get("HIDDEN").dxf.linetype.upper() if "HIDDEN" in doc.layers else "CONTINUOUS"
+    if "HIDDEN" in used and "DASHED" not in doc.linetypes:
+        fail(f"{tag} DXF has no DASHED linetype")
     msp = doc.modelspace()
     groups, hatches, texts = {}, {}, []
     for e in msp:
@@ -133,8 +131,13 @@ def check_dxf(path, items, ents, dims, tag):
         lw = e.dxf.get("lineweight", -1)
         if lw not in (-1, LW[L]):
             fail(f"{tag} DXF {e.dxftype()} on {L} overrides lineweight to {lw}")
-        if L == "HIDDEN" and e.dxf.get("linetype", "BYLAYER").upper() not in ("BYLAYER", "DASHED"):
-            fail(f"{tag} DXF HIDDEN entity has linetype {e.dxf.linetype}")
+        if L == "HIDDEN":
+            # TASKS.md T2.9 Details: HIDDEN uses BYLAYER or DASHED; BYLAYER must resolve to DASHED.
+            lt = e.dxf.get("linetype", "BYLAYER").upper()
+            effective = hidden_layer_lt if lt == "BYLAYER" else lt
+            if effective != "DASHED":
+                fail(f"{tag} DXF HIDDEN {e.dxftype()} has effective linetype {effective} "
+                     f"(entity {lt}, layer {hidden_layer_lt}), want DASHED")
         eid = None
         if e.has_xdata("OPENBIM"):
             vals = [v for c, v in e.get_xdata("OPENBIM") if c == 1000]
@@ -210,9 +213,12 @@ def check_pdf(path, items, ents, dims, tag):
         fail(f"{tag} PDF header {head[:8]!r}, want %PDF-1.7")
     try:
         r = pypdf.PdfReader(path)
+        npages = len(r.pages)
         page = r.pages[0]
     except Exception as e:  # noqa: BLE001
         fail(f"{tag} pypdf cannot read the PDF: {e}")
+    if npages != 1:
+        fail(f"{tag} PDF has {npages} pages, want one page")
     root = r.trailer["/Root"]
     if "/OCProperties" not in root:
         fail(f"{tag} PDF has no /OCProperties (optional content groups)")
@@ -221,13 +227,18 @@ def check_pdf(path, items, ents, dims, tag):
     used = {it.layer for it in items}
     if len(set(names)) != len(names) or not used <= set(names) or not set(names) <= set(LAYERS):
         fail(f"{tag} PDF OCG names {names}: want one group per layer, covering {sorted(used)}")
-    props = {}
+    props, ext_lw = {}, {}
     res = page["/Resources"]
     if "/Properties" in res:
         for k, v in res["/Properties"].get_object().items():
             o = v.get_object()
             if "/Name" in o:
                 props[str(k)] = str(o["/Name"])
+    if "/ExtGState" in res:  # a line width may also be set through `gs` (ExtGState /LW)
+        for k, v in res["/ExtGState"].get_object().items():
+            o = v.get_object()
+            if "/LW" in o:
+                ext_lw[str(k)] = float(o["/LW"])
     text = page.extract_text() or ""
     for did, txt in dims.items():
         if txt not in text.replace(" ", ""):
@@ -250,6 +261,8 @@ def check_pdf(path, items, ents, dims, tag):
             ctm = ctm @ mat(*map(float, operands))
         elif op == "w":
             lw = float(operands[0])
+        elif op == "gs":
+            lw = ext_lw.get(str(operands[0]), lw)
         elif op == "BDC":
             name = None
             if str(operands[0]) == "/OC":

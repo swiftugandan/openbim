@@ -74,8 +74,10 @@ class Cases:
         A, B = self.manifold(a), self.manifold(b)
         return {"union": A + B, "difference": A - B, "intersection": A ^ B}[op]
 
-    def section(self, name, sid, n, offset, contours=None, convex=None):
-        """Expected region = XOR of `contours` (2D, plane basis) or of convex hulls of 3D point sets."""
+    def section(self, name, sid, n, offset, contours=None, convex=None, scale=1.0):
+        """Expected region = XOR of `contours` (2D, plane basis) or of convex hulls of 3D point sets.
+        `scale` multiplies the normal and offset written to the case file (same plane, non-unit
+        normal: TASKS.md T2.5 Details say the normal need not be unit); expectations use the unit normal."""
         n = np.asarray(n, float)
         n = n / np.linalg.norm(n)
         u, v = basis(n)
@@ -102,7 +104,8 @@ class Cases:
         geom = Polygon()
         for c in contours:
             geom = geom.symmetric_difference(Polygon(c))
-        self.lines.append(f"section {name} {sid} {fmt(n[0])} {fmt(n[1])} {fmt(n[2])} {fmt(offset)}")
+        self.lines.append(f"section {name} {sid} {fmt(scale * n[0])} {fmt(scale * n[1])} {fmt(scale * n[2])} "
+                          f"{fmt(scale * offset)}")
         self.expected.append({
             "case": name, "n": n.tolist(), "offset": float(offset), "u": u.tolist(), "v": v.tolist(),
             "area": geom.area, "wkt": geom.wkt, "regions": len(getattr(geom, "geoms", [geom])) if geom.area > 0 else 0,
@@ -139,11 +142,16 @@ def build():
     C.section("cube_three_vertices", "cube", (1, 1, 1), 1 / s3, convex=[[(1, 0, 0), (0, 1, 0), (0, 0, 1)]])
     C.section("cube_hexagon", "cube", (1, 1, 1), 1.5 / s3,
               convex=[[(1, .5, 0), (1, 0, .5), (.5, 0, 1), (0, .5, 1), (0, 1, .5), (.5, 1, 0)]])
+    # The same hexagon with a non-unit normal written to the case file (scaled normal and offset).
+    C.section("cube_hexagon_scaled_normal", "cube", (1, 1, 1), 1.5 / s3, scale=2.5,
+              convex=[[(1, .5, 0), (1, 0, .5), (.5, 0, 1), (0, .5, 1), (0, 1, .5), (.5, 1, 0)]])
     C.section("cube_two_vertical_edges", "cube", (1, -1, 0), 0.0, convex=[[(0, 0, 0), (0, 0, 1), (1, 1, 0), (1, 1, 1)]])
     C.section("cube_tilted_through_edges", "cube", (1, 0, -1), 0.0, convex=[[(0, 0, 0), (0, 1, 0), (1, 0, 1), (1, 1, 1)]])
     # Tube (prism with a hole): hole loops, two regions, a coplanar inner face.
     C.prism("tube", 0, 2, box(0, 0, 4, 4), [box(1, 1, 3, 3)[::-1]])
     C.section("tube_mid", "tube", (0, 0, 1), 1.0,
+              convex=[cube_pts(0, 0, 1, 4, 4, 1), cube_pts(1, 1, 1, 3, 3, 1)])
+    C.section("tube_mid_small_normal", "tube", (0, 0, 1), 1.0, scale=0.25,
               convex=[cube_pts(0, 0, 1, 4, 4, 1), cube_pts(1, 1, 1, 3, 3, 1)])
     C.section("tube_vertical_two_regions", "tube", (1, 0, 0), 2.0,
               convex=[cube_pts(2, 0, 0, 2, 1, 2), cube_pts(2, 3, 0, 2, 4, 2)])
@@ -256,12 +264,15 @@ def check_case(exp, got):
 
 def check(expected, outputs):
     got = {}
+    errs = []
     for line in outputs:
         line = line.strip()
         if line:
-            o = json.loads(line)
-            got[o["case"]] = o
-    errs = []
+            try:  # NaN/inf areas or malformed lines are failures, not crashes
+                o = json.loads(line, parse_constant=lambda c: float("nan"))
+                got[o["case"]] = o
+            except (ValueError, KeyError, TypeError) as e:
+                errs.append(f"driver output line is not a section record ({e}): {line[:80]}")
     for exp in expected:
         if exp["case"] not in got:
             errs.append(f"{exp['case']}: no output")

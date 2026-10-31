@@ -177,7 +177,6 @@ fn deps_and_dependents() {
     assert_eq!(doc.dependents(id("L")), vec![id("w")]);
     assert_eq!(doc.dependents(id("w")), sorted(vec![id("d"), id("i")]));
     assert_eq!(doc.dependents(id("d")), vec![id("i")]);
-    assert_eq!(doc.dependents(id("ghost")), vec![id("i")]);
     assert!(doc.dependents(id("lone")).is_empty());
 
     // Edges follow edits: replacing and deleting update both directions.

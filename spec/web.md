@@ -20,7 +20,7 @@ class Model {
   solve(trade: string): string;                 // JSON as `bim solve --json`
   exportView(view: string, format: string): string;
   validate(standard: string): string;           // JSON as `bim validate --standard <s> --json` (added by T8.4)
-  issues(): string;                             // JSON [{id, title, status, entities}] of Issue entities (added by T8.4)
+  issues(): string;                             // JSON [{id, title, status, entities: [id strings]}] of Issue entities (added by T8.4)
 }
 export const memory: WebAssembly.Memory;
 ```

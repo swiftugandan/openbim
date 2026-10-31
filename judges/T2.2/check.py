@@ -249,11 +249,14 @@ for k, ((name, a, b), r) in enumerate(zip(cases, results)):
         vol = unbits(got["volume"])
         if abs(vol - want_v) > max(1e-9 * want_v, 1e-12):
             fail(f"{label}: volume {vol}, manifold3d {want_v}")
-        if not got["closed"]:
+        if not empty and not got["closed"]:
             fail(f"{label}: is_closed_manifold() is false")
         if empty:
             if got["faces"] != 0:
                 fail(f"{label}: empty result should have no faces, has {got['faces']}")
+            path = tmp / got["stl"]
+            if not path.exists() or b"facet" in path.read_bytes():
+                fail(f"{label}: to_stl of an empty result must write a file with no facets")
             checked += 1
             continue
         oracle_mesh = mesh_of(R)

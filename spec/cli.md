@@ -14,7 +14,7 @@ budget missed), `2` invalid input or usage (nothing is changed), `3` internal er
 | `bim apply <dir> <file>` | `*.json` → JSON ops; anything else → the line format of T1.5. Atomic: all ops or none (exit 2). |
 | `bim hash <dir>` | 16 lowercase hex digits: content hash of the live document. |
 | `bim show <dir> <id> --json` | `{"id","kind","props":{…}}` with Values in JSON encoding (spec/schema.md). |
-| `bim commit <dir> -m <msg>` | Records a revision; prints its id (16 hex digits = content hash at that moment). |
+| `bim commit <dir> -m <msg>` | Records a revision; prints its id (16 hex digits = content hash at that moment). Only `bim commit` records revisions; `bim init` records none. |
 | `bim log <dir> --json` | `[{"rev","message","ops"}]` oldest first; `ops` = ids (16 hex) of the ops recorded since the previous revision, in apply order. |
 | `bim diff <dirA> <dirB>` | T1.5 behaviour (same/differ). |
 | `bim diff <dir> <revA> <revB> --json` | `{"added":[id],"removed":[id],"changed":[{"id","keys":[…]}]}`, ids sorted (reserved `_` keys may appear). Exit 0 if empty, else 1; unknown revision exits 2. |
@@ -59,7 +59,8 @@ Dimensions (`Dimension` entities) render as text equal to the measured distance 
 
 View geometry: `plan:<level>@<h>` cuts at level elevation + h; `elevation:s` looks north (+y) with the viewer's right along +x
 (n, e, w analogous); in a section the viewer's right is the line direction and the plane is unbounded. An unknown or
-unparseable `--view` exits 2. SVG user units are paper mm, y down, model up is up on paper, scale 1:100, origin free,
+unparseable `--view` exits 2. In a plan or section, PROJECTION/HIDDEN geometry shows only the model on the far side of the
+cut plane; what the cut removes is not drawn. SVG user units are paper mm, y down, model up is up on paper, scale 1:100, origin free,
 coordinates to ≥ 0.01 mm; CUT outlines are closed rings (holes are extra rings) with HATCH inside; HIDDEN strokes carry a
 `stroke-dasharray`; stroke width and `data-entity` may be inherited from an enclosing (non-layer) group. A Dimension
 referencing two Points measures their 3D distance and is drawn in the view equal to its `view` prop as a `<text>` on

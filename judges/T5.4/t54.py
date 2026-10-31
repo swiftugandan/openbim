@@ -10,11 +10,15 @@ IfcWall/IfcSlab/IfcColumn/IfcBeam with a body (paired by GlobalId) and per-store
 footprint area agree within 1e-4 relative; every DXF passes ezdxf audit with zero errors; every SVG
 parses. All of a file's commands together must take < 60 s.
 
-Id rule assumed (Spec gap, as in T5.3): a storey imports as the Level whose id is the ULID spelling of
-the storey's GlobalId, and export maps entity ids back to the same GlobalIds.
+Id rule (T5.3 Details): an imported entity's id is the 26-char ULID spelling of the 128 bits of its
+GlobalId, so a storey imports as the Level `ulid(GlobalId)` and export (T5.2 Details) maps every id
+back to the same GlobalId; elements and storeys are therefore paired by GlobalId. The round-tripped
+element may carry any IfcElement class (T5.3 keeps non-extrusion geometry on an imported-geometry
+entity); storey slab areas are summed over the original's IfcSlabs, paired by GlobalId on both sides.
 """
 import glob
 import json
+import multiprocessing
 import os
 import subprocess
 import sys
@@ -55,13 +59,6 @@ def has_body(el):
     return rep is not None and any(r.RepresentationIdentifier == "Body" for r in rep.Representations)
 
 
-def geom(el):
-    try:
-        return ifcopenshell.geom.create_shape(SETTINGS, el).geometry
-    except Exception:  # noqa: BLE001
-        return None
-
-
 def storey_of(el):
     c = uel.get_container(el)
     while c is not None and not c.is_a("IfcBuildingStorey"):
@@ -72,21 +69,31 @@ def storey_of(el):
     return c
 
 
-def measure(f):
-    """{guid: volume} for comparable elements and {storey guid: total slab footprint area}."""
-    vols, areas, unbuildable = {}, {}, []
-    for el in f.by_type("IfcElement"):
-        if not any(el.is_a(c) for c in CLASSES) or not has_body(el):
-            continue
-        g = geom(el)
-        if g is None:
-            unbuildable.append(el.GlobalId)
-            continue
-        vols[el.GlobalId] = ush.get_volume(g)
-        if el.is_a("IfcSlab"):
-            st = storey_of(el)
-            if st is not None:
-                areas[st.GlobalId] = areas.get(st.GlobalId, 0.0) + ush.get_footprint_area(g)
+def comparable(f):
+    """Original-side elements whose volume must survive the round trip (T5.4 Details)."""
+    return [el for el in f.by_type("IfcElement") if any(el.is_a(c) for c in CLASSES) and has_body(el)]
+
+
+def measure(f, elements, slab_guids):
+    """{guid: volume} for `elements` (world coordinates, multi-threaded iterator) and
+    {storey guid: total slab footprint area} over those whose GlobalId is in `slab_guids` (the
+    original's IfcSlabs, whatever class they come back as); third result: elements ifcopenshell
+    could not mesh."""
+    vols, areas = {}, {}
+    if elements:
+        it = ifcopenshell.geom.iterator(SETTINGS, f, multiprocessing.cpu_count(), include=elements)
+        if it.initialize():
+            while True:
+                sh = it.get()
+                g = sh.geometry
+                vols[sh.guid] = ush.get_volume(g)
+                if sh.guid in slab_guids:
+                    st = storey_of(f.by_guid(sh.guid))
+                    if st is not None:
+                        areas[st.GlobalId] = areas.get(st.GlobalId, 0.0) + ush.get_footprint_area(g)
+                if not it.next():
+                    break
+    unbuildable = [el.GlobalId for el in elements if el.GlobalId not in vols]
     return vols, areas, unbuildable
 
 
@@ -161,10 +168,13 @@ def one(bim, path, tmp):
         raise Fail(f"ifcopenshell cannot open the round-tripped IFC: {e}")
     if dst.schema != "IFC4":
         raise Fail(f"round-tripped file schema {dst.schema}, want IFC4")
-    v0, a0, bad0 = measure(src)
-    v1, a1, _ = measure(dst)
+    src_els = comparable(src)
+    slabs = {el.GlobalId for el in src_els if el.is_a("IfcSlab")}
+    v0, a0, bad0 = measure(src, src_els, slabs)
     if not v0:
         raise Fail("no IfcWall/IfcSlab/IfcColumn/IfcBeam with buildable body in the original: nothing to compare")
+    # Round-tripped side: the same GlobalIds under any IfcElement class (slab areas paired by the original's class).
+    v1, a1, _ = measure(dst, [el for el in dst.by_type("IfcElement") if has_body(el) and el.GlobalId in v0], slabs)
     for g, v in v0.items():
         if g not in v1:
             raise Fail(f"element {g} ({src.by_guid(g).is_a()} {src.by_guid(g).Name!r}) missing or without geometry after round trip")

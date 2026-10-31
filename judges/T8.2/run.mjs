@@ -173,7 +173,8 @@ try {
   await page.mouse.move(...far);
   const base = await shot(page, "a");
   const [ex, ey] = toCss(90, 10);
-  await page.mouse.move(ex + 4, ey + 3);     // 5 CSS px from the endpoint
+  await page.mouse.move(ex + 3, ey + 3);     // 4.2 CSS px from the endpoint: inside the 5 px snap radius
+                                             // even if the viewer rounds event coordinates to whole px
   await page.waitForTimeout(100);
   const hover = await shot(page, "a");
   let n = 0, sx = 0, sy = 0;

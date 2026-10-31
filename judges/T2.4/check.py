@@ -22,7 +22,7 @@ from python_solvespace import Entity, SolverSystem, make_quaternion
 
 FREE = Entity.FREE_IN_3D
 POS_TOL = 1e-6
-RES_TOL = 1e-7
+RES_TOL = 1e-6  # the contract's own Inconsistent threshold (T1.3 / T2.4 Details)
 
 
 class OracleError(Exception):
@@ -233,6 +233,11 @@ def compare(cases, oracle, results):
                 res = float(np.linalg.norm(equations(case, o["cons"], x)))
                 if not res < RES_TOL:
                     fails.append(f"{tag}: solved positions leave residual {res:.3e}")
+            if not o["cons"]:
+                # An unconstrained point is its own subsystem with no equations: solving never moves it.
+                for i in o["points"]:
+                    if np.max(np.abs(np.array(r["positions"][i]) - np.array(case["points"][i]))) > 1e-9:
+                        fails.append(f"{tag}: unconstrained point {i} moved from {case['points'][i]} to {r['positions'][i]}")
             if o["pos"] is not None:
                 for i, p in o["pos"].items():
                     got = r["positions"][i]

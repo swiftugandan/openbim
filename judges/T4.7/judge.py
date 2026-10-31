@@ -2,9 +2,10 @@
 #
 # Drives the real `bim` binary and compares with
 #   * closed forms: nominal-size selection (velocity / Colebrook pressure-gradient limits), circuit
-#     current and voltage drop, 16-gon / rectangular prism volumes, clash volumes of pipes and ducts
-#     passing through walls, columns and ducts, clearance distances between parallel faces;
-#   * manifold3d: intersection volumes of the solids `bim export --format gltf` writes;
+#     current and voltage drop, 16-gon (vertices at D/2) / rectangular prism volumes, clash volumes of
+#     pipes and ducts passing through walls, columns and ducts, clearance distances between parallel faces;
+#   * manifold3d: intersection volumes of the solids `bim export --format gltf` writes (read back in the
+#     y-up frame of spec/cli.md: glTF (x, y, z) = model (x, z, -y));
 #   * trimesh proximity: clearance distances between those exported solids.
 # Usage: python -I judge.py <bim-binary> <scratch-dir>
 import base64
@@ -268,7 +269,7 @@ SEGS = {  # id: (shape, dims, from xyz, to xyz)
     "D1": ("rect", (0.4, 0.3), (4, -1, 1.0), (4, 1, 1.0)),  # through wall W1
     "P2": ("round", 0.1, (5, -1, 1.2), (5, 1, 1.2)),        # through the window opening of W1: no clash
     "D2": ("rect", (0.2, 0.2), (1, 0.23, 2.5), (3, 0.23, 2.5)),  # 0.03 off W1's face
-    "P5": ("round", 0.1, (1, 0.18, 0.5), (3, 0.18, 0.5)),   # ~0.03 off W1's face (depends on 16-gon)
+    "P5": ("round", 0.1, (1, 0.18, 0.5), (3, 0.18, 0.5)),   # ~0.03 off W1's face (depends on the 16-gon's rotation)
     "P3": ("round", 0.1, (7, 2, 1), (9, 2, 1)),             # through column C1 (0.3)
     "D3": ("rect", (0.4, 0.4), (10, 0, 1), (10, 4, 1)),
     "P4": ("round", 0.1, (9.5, 2, 1), (10.5, 2, 1)),        # through duct D3 (0.4)
@@ -312,21 +313,23 @@ def world_meshes(d):
     if "C1" not in raw:
         fail("glTF export has no mesh for column C1")
     want_lo, want_hi = np.array([7.85, 1.85, 0.0]), np.array([8.15, 2.15, 3.0])
-    # The export may keep z up or use glTF's y-up convention; identify it from the column's known box.
-    for name, t in (("z-up", np.eye(3)), ("y-up", np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float))):
-        v = raw["C1"].vertices @ t.T
-        if np.allclose(v.min(0), want_lo, atol=1e-4) and np.allclose(v.max(0), want_hi, atol=1e-4):
-            out = {}
-            for k, m in raw.items():
-                m2 = m.copy()
-                m2.vertices = m.vertices @ t.T
-                out[k] = m2
-            return out
-    fail(f"column C1 in glTF has bounds {raw['C1'].bounds.tolist()}, not the column box in either axis convention")
+    # spec/cli.md: glTF (x, y, z) = model (x, z, -y), so model = (gx, -gz, gy). Checked on the column's known box.
+    t = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float)
+    v = raw["C1"].vertices @ t.T
+    if not (np.allclose(v.min(0), want_lo, atol=1e-4) and np.allclose(v.max(0), want_hi, atol=1e-4)):
+        fail(f"column C1 in glTF has bounds {raw['C1'].bounds.tolist()}; in the y-up frame of spec/cli.md "
+             f"(glTF (x, y, z) = model (x, z, -y)) it must map to {want_lo.tolist()}..{want_hi.tolist()}")
+    out = {}
+    for k, m in raw.items():
+        m2 = m.copy()
+        m2.vertices = m.vertices @ t.T
+        out[k] = m2
+    return out
 
 
 def check_segment_solids(meshes):
-    radius = {}
+    """spec/schema.md: round = 16-gon prism with every vertex at radius D/2; rect = width horizontal and
+    perpendicular to the axis, height vertical; both run from the `from` port to the `to` port."""
     for s, (shape, dims, a, b) in SEGS.items():
         if s not in meshes:
             fail(f"glTF export has no mesh for segment {s} (extras.id)")
@@ -348,13 +351,10 @@ def check_segment_solids(meshes):
                     fail(f"round segment {s}: cap has {cap.sum()} vertices, expected a 16-gon")
             if r.max() - r.min() > 1e-5:
                 fail(f"round segment {s}: 16-gon vertices are not on one circle")
-            R = r.mean()
-            conv = [dims / 2, dims / 2 / math.cos(math.pi / 16)]  # vertices on the circle / sides tangent to it
-            Rx = min(conv, key=lambda c: abs(c - R))
-            if abs(R / Rx - 1) > 1e-4:
-                fail(f"round segment {s}: 16-gon radius {R} matches neither D/2 nor D/(2 cos(pi/16))")
-            radius[s] = Rx
-            close(abs(m.volume), P16 * Rx * Rx * L, 1e-4, f"segment {s} 16-gon prism volume")
+            R = dims / 2
+            if abs(r.mean() / R - 1) > 1e-4:
+                fail(f"round segment {s}: 16-gon vertex radius {r.mean()}, spec/schema.md requires D/2 = {R}")
+            close(abs(m.volume), P16 * R * R * L, 1e-4, f"segment {s} 16-gon prism volume")
         else:
             w, h = dims
             if len(m.vertices) != 8:
@@ -364,9 +364,6 @@ def check_segment_solids(meshes):
             horiz /= np.linalg.norm(horiz)
             close(np.ptp(radial @ horiz), w, 1e-4, f"rect segment {s} horizontal size (width)")
             close(np.ptp(m.vertices[:, 2]), h, 1e-4, f"rect segment {s} vertical size (height)")
-    if len(set(radius.values())) != 1:
-        fail("round segments use different 16-gon radius conventions")
-    return radius
 
 
 def manifold_volume(ma, mb):
@@ -418,8 +415,8 @@ def pairs(lst, field, what):
 def clash():
     d = project("clash", scene_ops())
     meshes = world_meshes(d)
-    R = check_segment_solids(meshes)
-    a16 = P16 * R["P1"] ** 2
+    check_segment_solids(meshes)
+    a16 = P16 * (SEGS["P1"][1] / 2) ** 2  # 16-gon with vertices at radius D/2 (schema.md)
 
     doc = clash_json(d, 0.05, 1)
     hard = pairs(doc["hard"], "volume", "hard clashes")

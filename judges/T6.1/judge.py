@@ -44,6 +44,8 @@ def project(name, entities):
     if p.returncode != 0:
         fail(f"bim init {name} exited {p.returncode}: {p.stderr}")
     ops = [{"op": "create", "id": i, "kind": k, "props": props} for i, k, props in entities]
+    if not ops:  # an empty project needs no apply (whether an empty ops list is accepted is not pinned)
+        return d
     path = os.path.join(TMP, f"{name}.json")
     with open(path, "w") as f:
         json.dump({"schema": 1, "ops": ops}, f)
@@ -187,7 +189,7 @@ expect_rows(empty, 'e("x").\ne("y").\nf("x").\nt(X, "tag") :- e(X).\nt(X, "tag")
 expect_error(empty, facts + 'p(X) :- edge(X, Y), not q(X).\nq(X) :- edge(X, Y), not p(X).\n', "p(X)",
              "mutual negation through recursion")
 expect_error(empty, facts + "p(X) :- edge(X, Y), not p(Y).\n", "p(X)", "self-negation")
-expect_error(empty, facts + "p(X) :- edge(X, Y)\n", "p(X)", "missing final period")
+expect_error(empty, facts + "p(X) :- edge(X, Y.\n", "p(X)", "unbalanced parenthesis (syntax error)")
 
 # ---------------------------------------------------------------- 2. document relations: entity/prop/ref
 rng = random.Random(6102)

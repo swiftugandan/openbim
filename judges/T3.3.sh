@@ -13,7 +13,7 @@ import json, sys
 pk = {p["name"]: p for p in json.load(sys.stdin)["packages"]}
 sy = pk.get("bim-sync") or sys.exit("bim-sync is not a workspace member")
 deps = {d["name"] for d in sy["dependencies"] if d.get("kind") is None}
-if not deps & {"tungstenite", "tokio-tungstenite"}:
+if not deps & {"tungstenite", "tokio-tungstenite", "async-tungstenite"}:
     sys.exit("bim-sync must use tungstenite for its WebSocket transport")
 ' || fail "crate structure (see above)"
 

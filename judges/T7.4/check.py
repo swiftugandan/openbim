@@ -186,12 +186,12 @@ def parse_dxf(path):
 
 # ------------------------------------------------------------------------------- checks
 def check_size(sheet, fmt, size):
+    # Named sizes are ISO 216 landscape (TASKS.md T7.4 Details): width is the long side.
     for w, h in EXPECT_SIZE[sheet]:
-        named = isinstance(SHEETS[sheet]["size"], str)
-        options = [(w, h), (h, w)] if named else [(w, h)]
-        if any(near(size[0], a, 0.2) and near(size[1], b, 0.2) for a, b in options):
+        if near(size[0], w, 0.2) and near(size[1], h, 0.2):
             return
-    fail(f"{sheet}.{fmt}: sheet is {size[0]:.2f} x {size[1]:.2f} mm, want {EXPECT_SIZE[sheet][0]} (ISO 216)")
+    fail(f"{sheet}.{fmt}: sheet is {size[0]:.2f} x {size[1]:.2f} mm, want {EXPECT_SIZE[sheet][0]} "
+         "(ISO 216, landscape: width x height)")
 
 
 def check_common(sheet, fmt, prims, text, clipped_ok):

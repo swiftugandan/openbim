@@ -11,9 +11,15 @@ cargo build -q -p bim-cli || fail "cargo build -p bim-cli failed"
 bim="$CARGO_TARGET_DIR/debug/bim"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-run() { # run <what> <cmd...>: must exit 0; stdout in $tmp/out
+timed() { # timed <seconds> <cmd...>: run with a timeout (macOS has no `timeout`); exit 124 on expiry
+  "$py" -I -S -c 'import subprocess,sys
+try: sys.exit(subprocess.run(sys.argv[2:], timeout=float(sys.argv[1])).returncode)
+except subprocess.TimeoutExpired: sys.exit(124)' "$@"
+}
+run() { # run <what> <cmd...>: must exit 0 within 60 s; stdout in $tmp/out
   local what=$1; shift
-  set +e; "$@" >"$tmp/out" 2>"$tmp/err"; local rc=$?; set -e
+  set +e; timed 60 "$@" >"$tmp/out" 2>"$tmp/err"; local rc=$?; set -e
+  [ "$rc" = 124 ] && fail "$what timed out after 60 s"
   [ "$rc" = 0 ] || fail "$what exited $rc: $(head -c 400 "$tmp/err")"
 }
 t55() { "$py" -I -B judges/T5.5/t55.py "$@"; }
@@ -53,7 +59,7 @@ out=$(t55 compare "$tmp/X.solve.json" "$tmp/Y.solve.json" "$tmp/X.ifc" "$tmp/Y.i
 # Malformed ifcJSON is invalid input: exit 2, nothing changed.
 run "bim hash Y" "$bim" hash "$tmp/Y"; hy=$(cat "$tmp/out")
 printf '{"type":"ifcJSON","version":"0.0.1","data":[{"type":"IfcWall","globalId":' > "$tmp/bad.json"
-set +e; "$bim" import "$tmp/Y" "$tmp/bad.json" >/dev/null 2>&1; rc=$?; set -e
+set +e; timed 60 "$bim" import "$tmp/Y" "$tmp/bad.json" >/dev/null 2>&1; rc=$?; set -e
 [ "$rc" = 2 ] || fail "import of truncated ifcJSON exited $rc, want 2"
 run "bim hash Y" "$bim" hash "$tmp/Y"
 [ "$(cat "$tmp/out")" = "$hy" ] || fail "rejected ifcJSON import changed the document"

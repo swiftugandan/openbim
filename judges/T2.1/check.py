@@ -148,6 +148,18 @@ for _ in range(500):
     ic.append(tuple((math.ldexp(rng.uniform(-1, 1), scale_exp() // 2), math.ldexp(rng.uniform(-1, 1), scale_exp() // 2)) for _ in range(4)))
 ic.append(((5.0, 0.0), (0.0, 5.0), (-5.0, 0.0), (0.0, 0.0)))  # centre inside CCW circle: positive
 
+# Exact signs are promised only for |coords| in {0} U [2^-100, 2^100]; drop the few scaled-integer
+# cases that land outside (the scale exponent can push 2^21-sized integers past 2^100).
+LO, HI = 2.0 ** -100, 2.0 ** 100
+
+
+def in_range(case):
+    return all(x == 0 or LO <= abs(x) <= HI for p in case for x in p)
+
+
+o2 = [c for c in o2 if in_range(c)]
+o3 = [c for c in o3 if in_range(c)]
+ic = [c for c in ic if in_range(c)]
 exp_o2 = [orient2d_exact(*c) for c in o2]
 exp_o3 = [orient3d_exact(*c) for c in o3]
 exp_ic = [incircle_exact(*c) for c in ic]

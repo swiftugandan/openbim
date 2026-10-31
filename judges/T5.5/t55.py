@@ -15,6 +15,7 @@
 """
 import json
 import random
+import re
 import sys
 import uuid
 
@@ -257,12 +258,20 @@ def check_export(out, path):
         doc = json.load(open(path))
     except ValueError as e:
         raise Fail(f"ifcJSON export is not JSON: {e}")
-    data = doc.get("data") if isinstance(doc, dict) else doc
-    need(isinstance(data, list) and data, "ifcJSON export has no object list (top-level list or 'data')")
+    # T5.5 Details: {"type":"ifcJSON","version":"0.0.1","schemaIdentifier":"IFC4","data":[…]} (spec/cli.md: 0.0.x)
+    need(isinstance(doc, dict), "ifcJSON export must be a JSON object with type/version/schemaIdentifier/data")
+    need(doc.get("type") == "ifcJSON", f"ifcJSON export top-level 'type' is {doc.get('type')!r}, want 'ifcJSON'")
+    need(isinstance(doc.get("version"), str) and re.fullmatch(r"0\.0\.\d+", doc["version"]),
+         f"ifcJSON export 'version' is {doc.get('version')!r}, want 0.0.x")
+    need(doc.get("schemaIdentifier") == "IFC4", f"ifcJSON export 'schemaIdentifier' is {doc.get('schemaIdentifier')!r}, want 'IFC4'")
+    data = doc.get("data")
+    need(isinstance(data, list) and data, "ifcJSON export has no non-empty 'data' object list")
     need(all(isinstance(o, dict) and isinstance(o.get("type"), str) for o in data), "every ifcJSON object needs a 'type'")
     by_type = {}
     for o in data:
-        by_type.setdefault(o["type"], []).append(o)
+        t = o["type"]
+        t = {"IfcWallStandardCase": "IfcWall", "IfcSlabStandardCase": "IfcSlab"}.get(t, t)  # IFC4 subtypes count as their base
+        by_type.setdefault(t, []).append(o)
     for cls, n in exp["counts"].items():
         got = len(by_type.get(cls, []))
         need(got == n, f"ifcJSON export has {got} {cls} objects, want {n}")

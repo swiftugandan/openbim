@@ -8,7 +8,12 @@ import path from "node:path";
 import { oracle } from "../lib/oracle.mjs";
 
 const [bim, bimMcp, dir, tmp] = process.argv.slice(2);
-const fail = (msg) => { console.error(`JUDGE FAIL: ${msg}`); process.exit(1); };
+let transport = null; // set once the server is spawned, so a failing exit never orphans it
+const fail = (msg) => {
+  console.error(`JUDGE FAIL: ${msg}`);
+  if (transport?.pid) { try { process.kill(transport.pid, "SIGKILL"); } catch { /* already gone */ } }
+  process.exit(1);
+};
 setTimeout(() => fail("timed out after 55 s"), 55_000).unref();
 
 const { Client } = await oracle("@modelcontextprotocol/sdk/client/index.js");
@@ -71,10 +76,14 @@ function close(a, b, where, rel = 1e-9) {
   }
   if (a !== b) fail(`${where}: ${JSON.stringify(a)} != ${JSON.stringify(b)}`);
 }
-const canon = (list) => [...list].sort((x, y) => (JSON.stringify(x) < JSON.stringify(y) ? -1 : 1));
+// Order-insensitive comparison key: objects serialised with sorted keys, so the server's and the
+// CLI's key order cannot change how a list of violation/diagnostic objects sorts.
+const stable = (v) => Array.isArray(v) ? v.map(stable)
+  : v && typeof v === "object" ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, stable(v[k])])) : v;
+const canon = (list) => [...list].sort((x, y) => (JSON.stringify(stable(x)) < JSON.stringify(stable(y)) ? -1 : 1));
 
 // ---------- MCP client ----------
-const transport = new StdioClientTransport({ command: bimMcp, args: [dir], stderr: "pipe" });
+transport = new StdioClientTransport({ command: bimMcp, args: [dir], stderr: "pipe" });
 let stderr = "";
 transport.stderr?.on("data", (d) => { stderr += d; });
 const client = new Client({ name: "openbim-judge", version: "1.0.0" });

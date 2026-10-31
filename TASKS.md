@@ -17,7 +17,7 @@ BCF XSDs, Khronos glTF-Validator, the official MCP SDK, Playwright (system Chrom
 otherwise closed-form textbook results. Verifications target under a minute on a warm `.build/` cache
 (Build warms it); cold first compiles of large dependencies take longer, and a few judges are slower by design:
 T7.5 (100k-element bench, ≤ 300 s), T5.4 (≤ 60 s per corpus file), T8.1/T8.3/T8.4 (wasm + app rebuild and a
-browser session, ≤ 150 s). The loop's gate allows 900 s per judge.
+browser session, ≤ 150 s), T1.7 (10,000-case proptest with a solver call per case, ≤ 600 s). The loop's gate allows 900 s per judge.
 External crates and npm packages are allowed when a task needs them (pin versions; no network services at run time).
 The loop's gate also reruns every earlier `[x]` task's Verification, so regressions fail the task that caused them.
 
@@ -217,7 +217,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T4.2.sh
   - Spec: Crate `bim-arch` (TradeEngine "arch"): planar arrangement of wall centrelines per level (splitting at intersections, T-junctions, dangling walls ignored), bounded faces → rooms with the area/volume rule of spec/schema.md, each room labelled by the `Space` whose `x y` lies inside it; per-layer material takeoff. Output per spec/cli.md `solve --trade arch`. Judge computes rooms independently with shapely (polygonize + per-wall inner-face offsets) on rectangular, L-shaped and non-orthogonal plans.
-  - Details: Room rules (inner faces, next level, slab above, numbering, `space`) are in spec/schema.md and spec/cli.md.
+  - Details: Room rules (inner faces, next level, slab above, numbering, `space`) are in spec/schema.md and spec/cli.md. `rooms[].boundary` is the room's inner-face polygon (the polygon whose area is `area`), one `[x, y]` per vertex, closing vertex optional.
 
 - [ ] T4.3: curtain walls, stairs and ramps
   - Files: Cargo.lock, crates/engines/arch/, crates/bim-model/
@@ -242,7 +242,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T4.5.sh
   - Spec: TradeEngine "struct": extract an analytical stick model from Column/Beam entities (member axes through section centroids, nodes merged within 1e-6, beams split where other members frame in, `Support`s and column bases at the lowest level fixed unless a Support says otherwise); AreaLoads distributed to supporting beams by tributary area (each slab point goes to its nearest supporting beam); PointLoads applied at nearest node; combinations from LoadCombination entities; utilization = |N|/(A·fy) + |My|/(Wy·fy) + |Mz|/(Wz·fy). Output per spec/cli.md. Judge: tributary areas for rectangular bays by closed form, reactions equal total load, envelopes vs PyNite.
-  - Details: Analytical members: reference vector +z for Beams, +y for Columns; section_b along local y, section_h along local z: A = b·h, Iy = b·h³/12, Iz = h·b³/12, Wy = b·h²/6, Wz = h·b²/6, J = a·c³·(1/3 − 0.21·(c/a)·(1 − c⁴/(12·a⁴))) with a ≥ c; Euler–Bernoulli, no self-weight. A Beam's axis is at level elevation − z_offset − section_h/2; a Column's runs base to top through (x, y); axes are split wherever another member's end lies on them (1e-6). Tributary loads reach each beam as a distributed load following the width of its nearest-beam region. Output conventions: spec/cli.md.
+  - Details: Analytical members: reference vector +z for Beams, +y for Columns; section_b along local y, section_h along local z: A = b·h, Iy = b·h³/12, Iz = h·b³/12, Wy = b·h²/6, Wz = h·b²/6, J = a·c³·(1/3 − 0.21·(c/a)·(1 − c⁴/(12·a⁴))) with a ≥ c; Euler–Bernoulli, no self-weight. A Beam's axis is at level elevation − z_offset − section_h/2; a Column's runs base to top through (x, y); axes are split wherever another member's end lies on them (1e-6). Tributary loads reach each beam as a distributed load following the width of its nearest-beam region. Tributary areas are measured on the slab's net plan region (SlabOpenings excluded); `tributary[].area` for a split member covers only that member's span. Output conventions: spec/cli.md.
 
 - [ ] T4.6: MEP hydraulics: port networks, continuity, Darcy-Weisbach, network solve
   - Files: Cargo.toml, Cargo.lock, crates/engines/mep/, crates/bim-cli/
@@ -278,7 +278,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Builder: fable
   - Verification: bash judges/T5.2.sh
   - Spec: `bim export --format ifc`: IfcProject/Site/Building/BuildingStorey hierarchy, IfcWall (with IfcMaterialLayerSet), IfcSlab, IfcColumn, IfcBeam, IfcOpeningElement + IfcRelVoidsElement, IfcDoor/IfcWindow fillings, IfcSpace, Pset_*Common property sets, stable GlobalIds derived from entity ids. Judge: `ifcopenshell.validate` zero errors; ifcopenshell.geom volumes per element equal bim-model volumes within 1e-4 relative.
-  - Details: The GlobalId of the object exported for entity e is `ifcopenshell.guid.compress(format(u128(e.id), '032x'))`; storeys carry their Level's GlobalId and an IfcOpeningElement its Opening's. Door/window fillings get `Pset_DoorCommon`/`Pset_WindowCommon`.
+  - Details: The GlobalId of the object exported for entity e is `ifcopenshell.guid.compress(format(u128(e.id), '032x'))`; storeys carry their Level's GlobalId and an IfcOpeningElement its Opening's. Door/window fillings get `Pset_DoorCommon`/`Pset_WindowCommon`; every exported IfcWall/IfcSlab/IfcColumn/IfcBeam/IfcSpace carries its `Pset_<Class>Common`.
 
 - [ ] T5.3: IFC4 import into the document graph
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
@@ -312,7 +312,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python, .oracles/bcf-xsd
   - Verification: bash judges/T5.6.sh
   - Spec: Crate `bim-bcf`: topics, comments, viewpoints (camera, components by IfcGuid derived as in T5.2), `Issue` entities mirrored in the document; `bim bcf` create/export/import per spec/cli.md. Judge validates every XML file in the bcfzip against the official buildingSMART BCF 3.0 XSDs with xmlschema and checks import(export(x)) preserves topics, comments and components.
-  - Details: `bim bcf <dir> create --title <t> --entity <id> [<id>…]` prints the new topic Guid as its last stdout line; the mirrored Issue's id is that Guid (as a seed), `status` = TopicStatus, `entities` = Refs to the components. Component IfcGuids are derived as in T5.2. import(export(x)) preserves topic Guid, title, type, status, creation date (as an instant), author, description, labels; comments (Guid, date, author, text, viewpoint link); and each viewpoint's component IfcGuids. A non-zip or a reference to a missing entity exits 2 with nothing applied.
+  - Details: `bim bcf <dir> create --title <t> --entity <id> [<id>…]` prints the new topic Guid as its last stdout line; the mirrored Issue's id is that Guid (as a seed), `status` = TopicStatus, `entities` = Refs to the components. Component IfcGuids are derived as in T5.2. import(export(x)) preserves topic Guid, title, type, status, creation date (as an instant), author, description, labels; comments (Guid, date, author, text, viewpoint link); and each viewpoint's component IfcGuids. A non-zip or a reference to a missing entity exits 2 with nothing applied. `bim bcf import` mirrors every imported topic the same way (Issue id = topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to its viewpoint components).
 
 - [ ] T5.7: declarative code-rule packs (IBC, Eurocode, accessibility), hot-swappable
   - Files: Cargo.toml, Cargo.lock, crates/standards/codes/, crates/bim-cli/
@@ -329,7 +329,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T6.1.sh
   - Spec: Crate `bim-query`: parser for the language in spec/mcp.md, stratification (reject unstratifiable negation with an error), semi-naive bottom-up evaluation, the built-in relations derived from the document and engines. `bim query <dir> <program-file> <atom> --json` prints `{"rows": …}`. Judge compares with networkx (transitive closure, adjacency, reachability) on generated buildings and checks semi-naive and naive evaluation agree.
-  - Details: `bim query … --naive` evaluates by naive bottom-up iteration (reference mode) and prints identical rows. Rows hold the query atom's arguments in order; strings and ids (`_name`) are JSON strings, numbers JSON numbers; numeric constants match Num values by numeric equality (`3` matches `3.0`). A program that fails to parse or cannot be stratified exits 2. `bears_on`: Slab→Beam for each beam receiving tributary area from the slab; Beam→Column for each column whose `top` level is the beam's level and whose axis meets the beam at a node; Column→Column for the column directly below (same x, y, its `top` = this one's `base`); Column→Support for a Support at the column base. `bounds(Wall, Room)` holds only for walls with a centreline segment on the room's boundary (dangling walls bound nothing). `feeds` uses the solved flow sign.
+  - Details: `bim query --json` rows are sorted and deduplicated exactly as the MCP `query` tool's. `bim query … --naive` evaluates by naive bottom-up iteration (reference mode) and prints identical rows. Rows hold the query atom's arguments in order; strings and ids (`_name`) are JSON strings, numbers JSON numbers; numeric constants match Num values by numeric equality (`3` matches `3.0`). A program that fails to parse or cannot be stratified exits 2. `bears_on`: Slab→Beam for each beam receiving tributary area from the slab; Beam→Column for each column whose `top` level is the beam's level and whose axis meets the beam at a node; Column→Column for the column directly below (same x, y, its `top` = this one's `base`); Column→Support for a Support at the column base. `bounds(Wall, Room)` holds only for walls with a centreline segment on the room's boundary (dangling walls bound nothing). `feeds` uses the solved flow sign.
 
 - [ ] T6.2: MCP server over stdio
   - Files: Cargo.toml, Cargo.lock, crates/bim-mcp/
@@ -384,6 +384,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T7.5: stress corpus, criterion benchmarks, `bim bench` performance gate
   - Files: Cargo.toml, Cargo.lock, crates/bim-bench/, crates/bim-cli/, crates/bim-render/, crates/bim-incr/, crates/bim-model/
   - Opens: T7.3
+  - Needs: .oracles/py/bin/python
   - Builder: fable
   - Verification: bash judges/T7.5.sh
   - Spec: Crate `bim-bench`: deterministic synthetic hospital/city generator (100,000 parametric elements, ≥ 2,000,000 triangles: floors of rooms, walls with openings, columns, beams, ducts), criterion benches for compile, incremental edit, raycast and culling; `bim bench --elements 100000 --json` per spec/cli.md, measuring incremental edit latency (one wall thickness and one level elevation) and native wgpu frame time (orbit + section-box moves, 300 frames). Judge runs it and requires incremental_ms < 50, frame_ms_p95 < 16.6, triangles ≥ 2e6. Measured honestly on this machine (Intel i5-6600, Radeon R9 M395).

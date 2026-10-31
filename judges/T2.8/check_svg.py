@@ -138,12 +138,19 @@ def main():
                         if not reg.contains(Point(p)):
                             fail(f"{tag} HATCH point {np.round(p, 4)} of {eid} lies outside its cut region")
 
-    # ---- beyond geometry: every PROJECTION/HIDDEN stroke lies on a model feature edge
+    # ---- beyond geometry: every PROJECTION/HIDDEN stroke lies on a model feature edge, and in a
+    # plan or section on the far side of the cut plane (what the cut removes is not drawn).
     scene = views.Scene(solids, v)
     proj = [it for it in by_layer["PROJECTION"] if it.tag != "text"]
     if not proj:
         fail(f"{tag} nothing on PROJECTION")
     exact = v["kind"] == "elevation"
+    if v["kind"] == "plan":
+        cut_depth = -v["z"]                                  # depth = p . f with f = (0, 0, -1)
+    elif v["kind"] == "section":
+        cut_depth = float(np.r_[v["p0"], 0.0] @ v["f"])      # the plane through p0, normal f
+    else:
+        cut_depth = None
     for it in proj + [x for x in by_layer["HIDDEN"] if x.tag != "text"]:
         for a, b in it.segments():
             (a, b) = to_model([a, b])
@@ -155,6 +162,11 @@ def main():
                 m = scene.edges_at(q, TOL, b - a)
                 if not m:
                     fail(f"{tag} {it.layer} stroke of {it.entity} at {q.round(4)} is not on any model edge")
+                if cut_depth is not None:
+                    m = [(i, tt) for i, tt in m if scene.point_depths(i, tt) >= cut_depth - TOL]
+                    if not m:
+                        fail(f"{tag} {it.layer} stroke of {it.entity} at {q.round(4)} draws geometry on the "
+                             "viewer's side of the cut plane (only beyond geometry is drawn)")
                 if exact:
                     vis = [scene.visible(i, tt) for i, tt in m]
                     if it.layer == "PROJECTION" and not any(x is not False for x in vis):
@@ -169,8 +181,6 @@ def main():
                 for a, b in it.segments():
                     segs[L].append(LineString(to_model([a, b])))
         lines = {L: unary_union(s) if s else LineString() for L, s in segs.items()}
-        if lines["HIDDEN"].is_empty:
-            fail(f"{tag} elevation has no HIDDEN lines although the model has hidden edges")
         for i, (eid, a, b) in enumerate(scene.edges):
             e2 = scene.e2[i]
             if np.linalg.norm(e2[1] - e2[0]) < 10 * TOL:

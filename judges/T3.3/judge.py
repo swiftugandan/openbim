@@ -163,6 +163,7 @@ PEERS = ("A", "B", "C")
 def setup():
     """Base state on A, distributed through a server; then offline edits on A, B, C. Returns snapshot dir."""
     snap = os.path.join(TMP, "snap")
+    os.makedirs(snap)  # `bim init <dir>` is only promised to create <dir>, not its parents
     for n in ("S",) + PEERS:
         ok("init", os.path.join(snap, n))
     S, A, B, C = (os.path.join(snap, n) for n in ("S",) + PEERS)

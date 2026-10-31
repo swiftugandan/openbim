@@ -120,9 +120,9 @@ def load_gltf(path):
     return meshes
 
 
-# glTF is y-up; the model is z-up (spec/schema.md). Accept the identity frame or the standard
-# z-up -> y-up mapping glTF(x, y, z) = model(x, z, -y).
-FRAMES = {"z-up (identity)": np.eye(3), "y-up": np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float)}
+# spec/cli.md: glTF uses the y-up frame glTF(x, y, z) = model(x, z, -y), so model = (gx, -gz, gy).
+# This is the only accepted frame.
+Y_UP = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], float)
 
 
 def to_manifold(eid, v, f):
@@ -172,32 +172,17 @@ def main():
                 fail(f"{wid}: layer {i} material {lg.get('material')!r}, want {mat!r} (left side first)")
         close(sum(l.get("volume", float("nan")) for l in layers), w.get("volume"), REL,
               f"{wid}: sum of layer volumes vs wall volume", 1e-9)
-        if r["determinate"]:
-            close(w.get("volume"), r["solid"].volume(), REL, f"{wid}: volume", 1e-9)
-            for i, (lg, (mat, sol)) in enumerate(zip(layers, r["layers"])):
-                close(lg.get("volume"), sol.volume(), REL, f"{wid}: layer {i} ({mat}) volume", 1e-9)
-            # Spec gap (proposed): side_area = area of the wall solid's section by the vertical
-            # plane through its centreline, i.e. volume / thickness under the join rules.
-            close(w.get("side_area"), r["solid"].volume() / r["t"], REL, f"{wid}: side_area", 1e-9)
-        else:
-            if not (w.get("volume", 0) > 0):
-                fail(f"{wid}: volume must be positive")
+        # Every join is pinned by spec/schema.md (equal-thickness mitre, the unequal-thickness mitre
+        # through the outer-face and inner-face intersections, T-joins at the through wall's face),
+        # so each wall's own volume, layer volumes and side_area are checked individually.
+        close(w.get("volume"), r["solid"].volume(), REL, f"{wid}: volume", 1e-9)
+        for i, (lg, (mat, sol)) in enumerate(zip(layers, r["layers"])):
+            close(lg.get("volume"), sol.volume(), REL, f"{wid}: layer {i} ({mat}) volume", 1e-9)
+        # spec/cli.md: side_area = area of the wall solid's section by the vertical plane through
+        # its centreline. Every end cut is a vertical plane and openings go through the full
+        # thickness, so that section area is volume / thickness.
+        close(w.get("side_area"), r["solid"].volume() / r["t"], REL, f"{wid}: side_area", 1e-9)
 
-    # L-joins between walls of unequal thickness: the split is not pinned, the filled region is.
-    undet = sorted(i for i, r in rec["walls"].items() if not r["determinate"])
-    groups = []
-    for wid in undet:
-        for k in (0, 1):
-            j = rec["joins"][wid][k]
-            if j and j[0] == "L" and not rec["walls"][j[1].id]["determinate"]:
-                pair = tuple(sorted((wid, j[1].id)))
-                if pair not in groups:
-                    groups.append(pair)
-    for pair in groups:
-        union = model.run_through_union(rec, list(pair))
-        # Each wall's other end is free in the fixtures, so the pair's volume is the union.
-        close(sum(by_id[i]["volume"] for i in pair), union.volume(), REL,
-              f"L-join {pair}: sum of wall volumes vs the joined region (gap or overlap)", 1e-9)
 
     # --- slabs
     slabs = solve.get("slabs")
@@ -206,7 +191,7 @@ def main():
     for s in slabs:
         r = rec["slabs"][s["id"]]
         close(s.get("volume"), r["solid"].volume(), REL, f"{s['id']}: slab volume", 1e-9)
-        # Spec gap (proposed): slab area = net plan area (boundary minus SlabOpenings).
+        # spec/cli.md: slabs[].area = net plan area (boundary minus SlabOpenings).
         close(s.get("area"), r["area"], REL, f"{s['id']}: slab area", 1e-9)
 
     # --- glTF
@@ -215,37 +200,14 @@ def main():
     missing = sorted(set(want) - set(meshes))
     if missing:
         fail(f"glTF has no mesh node with extras.id for {missing}")
-    mans = {}
-    for eid in want:
-        v, f = meshes[eid]
-        mans[eid] = (v, f)
-    best = None
-    for name, R in FRAMES.items():
-        built = {}
-        err = 0.0
-        for eid, (v, f) in mans.items():
-            vv = (R @ v.T).T
-            lo, hi = vv.min(0), vv.max(0)
-            bb = want[eid].bounding_box()
-            err += float(np.abs(lo - np.array(bb[:3])).sum() + np.abs(hi - np.array(bb[3:])).sum())
-        if best is None or err < best[1]:
-            best = (name, err, R)
-    frame, _, R = best
-    solids = {eid: to_manifold(eid, (R @ v.T).T, f) for eid, (v, f) in mans.items()}
+    # Mesh vertices are glTF y-up; map them back to the model's z-up frame before comparing.
+    solids = {eid: to_manifold(eid, (Y_UP @ v.T).T, f) for eid, (v, f) in meshes.items() if eid in want}
     for eid, sol in solids.items():
-        wrec = rec["walls"].get(eid)
-        if wrec is not None and not wrec["determinate"]:
-            continue
-        close(sol.volume(), want[eid].volume(), GLTF_REL, f"glTF {eid}: mesh volume ({frame} frame)", 1e-9)
+        close(sol.volume(), want[eid].volume(), GLTF_REL, f"glTF {eid}: mesh volume (y-up frame)", 1e-9)
         x = xor_vol(sol, want[eid])
         if x > XOR_REL * want[eid].volume() + 1e-7:
-            fail(f"glTF {eid}: mesh differs from the schema solid by {x:.3g} m3 (wrong placement/shape)")
-    for pair in groups:
-        u = solids[pair[0]] + solids[pair[1]]
-        ref_u = model.run_through_union(rec, list(pair))
-        x = xor_vol(u, ref_u)
-        if x > XOR_REL * ref_u.volume() + 1e-7:
-            fail(f"glTF L-join {pair}: joined region differs from the schema region by {x:.3g} m3")
+            fail(f"glTF {eid}: mesh differs from the schema solid by {x:.3g} m3 "
+                 "(wrong placement/shape, or not the y-up frame glTF(x,y,z) = model(x,z,-y))")
     # Joined (and all other) solids never overlap.
     ids = sorted(solids)
     for i, a in enumerate(ids):
@@ -253,7 +215,7 @@ def main():
             ov = (solids[a] ^ solids[b]).volume()
             if ov > 1e-6 * min(solids[a].volume(), solids[b].volume()) + 1e-8:
                 fail(f"glTF solids {a} and {b} overlap by {ov:.3g} m3")
-    print(f"T2.7 check: {len(walls)} walls, {len(slabs)} slabs, {len(solids)} glTF solids ok ({frame})")
+    print(f"T2.7 check: {len(walls)} walls, {len(slabs)} slabs, {len(solids)} glTF solids ok (y-up)")
 
 
 if __name__ == "__main__":

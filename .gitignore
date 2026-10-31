@@ -8,3 +8,4 @@ node_modules/
 corpus/
 packages/bim-wasm/pkg-*/
 apps/studio/dist/
+__pycache__/

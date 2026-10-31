@@ -13,14 +13,16 @@ export async function shot(page, id) {
   return decodePng(await page.locator(tid(id)).first().screenshot({ animations: "disabled" }));
 }
 
-/** Pixels whose colour changed by more than `thr` in any channel: [[x, y], ...]. */
+/** Pixels whose colour changed by more than `thr` in any channel: [[x, y], ...]. If the element was
+ * resized between the two shots (a panel opened or closed and the layout reflowed), the common
+ * top-left region is compared; a reflow then shows up as a large change, never as a judge error. */
 export function diff(a, b, thr = 30) {
   const out = [];
-  if (a.w !== b.w || a.h !== b.h) fail(`element size changed between screenshots (${a.w}x${a.h} vs ${b.w}x${b.h})`);
-  for (let y = 0; y < a.h; y++) for (let x = 0; x < a.w; x++) {
-    const o = (y * a.w + x) * 4;
-    if (Math.abs(a.data[o] - b.data[o]) > thr || Math.abs(a.data[o + 1] - b.data[o + 1]) > thr ||
-        Math.abs(a.data[o + 2] - b.data[o + 2]) > thr) out.push([x, y]);
+  const w = Math.min(a.w, b.w), h = Math.min(a.h, b.h);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const oa = (y * a.w + x) * 4, ob = (y * b.w + x) * 4;
+    if (Math.abs(a.data[oa] - b.data[ob]) > thr || Math.abs(a.data[oa + 1] - b.data[ob + 1]) > thr ||
+        Math.abs(a.data[oa + 2] - b.data[ob + 2]) > thr) out.push([x, y]);
   }
   return out;
 }

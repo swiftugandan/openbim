@@ -1,5 +1,5 @@
 // External judge for T7.1: load the wasm-pack builds of bim-wasm in Node and check the spec/web.md
-// `Model` contract against the native CLI (glTF export, hash, solve, svg export).
+// `Model` contract against the native CLI (glTF export read back into model coordinates, hash, solve, svg export).
 // Usage: node judge.mjs <bim> <tmp-dir>
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
@@ -72,6 +72,9 @@ function mat4FromNode(n) {
 const mul = (a, b) => { const r = new Array(16).fill(0); for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let k = 0; k < 4; k++) r[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k]; return r; };
 const xf = (m, p) => [0, 1, 2].map((i) => m[i] * p[0] + m[4 + i] * p[1] + m[8 + i] * p[2] + m[12 + i]);
 const I4 = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+// spec/cli.md: the glTF is y-up, glTF (x, y, z) = model (x, z, -y); the wasm views are in model coordinates
+// (spec/web.md), so glTF positions are mapped back: model = (gx, -gz, gy). A z-up glTF fails the bbox check.
+const toModel = ([x, y, z]) => [x, -z, y];
 
 function gltfSummaries(file) {
   const g = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -98,7 +101,7 @@ function gltfSummaries(file) {
       const acc = (sums[id] ??= newAcc());
       for (const p of g.meshes[n.mesh].primitives) {
         if ((p.mode ?? 4) !== 4) fail("glTF primitive is not TRIANGLES");
-        const pos = read(p.attributes.POSITION).map((q) => xf(m, q));
+        const pos = read(p.attributes.POSITION).map((q) => toModel(xf(m, q)));
         const idx = p.indices !== undefined ? read(p.indices) : pos.map((_, i) => i);
         for (let t = 0; t + 2 < idx.length; t += 3) addTri(acc, pos[idx[t]], pos[idx[t + 1]], pos[idx[t + 2]]);
       }

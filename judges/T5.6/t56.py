@@ -7,14 +7,16 @@
   python -I -B t56.py validate <f.bcfzip>
       every XML file in the archive validates against its XSD; structure checks.
   python -I -B t56.py canon <f.bcfzip>
-      prints the canonical content (topics, comments, per-viewpoint components) as JSON.
+      prints the canonical content (topics, comments, per-viewpoint component lists) as JSON.
   python -I -B t56.py same <a.bcfzip> <b.bcfzip>        canonical content equal
   python -I -B t56.py created <outdir> <f.bcfzip> <guids.txt>
       checks the two topics made with `bim bcf create` (guids.txt: the Guid each create printed).
   python -I -B t56.py issues <outdir> <bim> <dir> <f.bcfzip>
       every topic in f.bcfzip is mirrored as an Issue entity (`bim show <dir> <topic guid> --json`).
 
-IfcGuid rule (T5.2, Spec gap in the report): IfcGuid = ifcopenshell.guid.compress(<EntityId as 32 hex>).
+IfcGuid rule (T5.2 Details): IfcGuid = ifcopenshell.guid.compress(<EntityId as 32 hex>).
+Mirror rule (T5.6 Details): the Issue's id is the topic Guid as a seed, `status` = TopicStatus,
+`entities` = Refs to the viewpoint components; applied to created and imported topics alike.
 """
 import datetime as dt
 import io
@@ -233,6 +235,10 @@ def instant(s):
 
 
 def canon(path):
+    """Canonical content per topic (T5.6 Details): Guid, title, type, status, creation date as an instant,
+    author, description, labels; comments (Guid, date, author, text, viewpoint link); each viewpoint's
+    component IfcGuids. Viewpoint Guids themselves are not promised stable, so a viewpoint is canonicalized
+    as its sorted component list and a comment's viewpoint link as the linked viewpoint's components."""
     files = validate(path)
     topics = {}
     for name, data in files.items():
@@ -240,12 +246,6 @@ def canon(path):
             continue
         folder = name.rsplit("/", 1)[0]
         tp = ET.fromstring(data).find("Topic")
-        comments = {}
-        for c in tp.findall("Comments/Comment"):
-            vp = c.find("Viewpoint")
-            comments[c.get("Guid")] = {"date": instant(c.findtext("Date")), "author": c.findtext("Author"),
-                                       "text": c.findtext("Comment"),
-                                       "viewpoint": vp.get("Guid") if vp is not None else None}
         vps = {}
         for vp in tp.findall("Viewpoints/ViewPoint"):
             ref = vp.findtext("Viewpoint")
@@ -254,12 +254,21 @@ def canon(path):
                 vi = ET.fromstring(files[f"{folder}/{ref}"])
                 comps = sorted(c.get("IfcGuid") for c in vi.findall("Components/Selection/Component"))
             vps[vp.get("Guid")] = comps
+        comments = {}
+        for c in tp.findall("Comments/Comment"):
+            vp = c.find("Viewpoint")
+            link = None
+            if vp is not None:
+                need(vp.get("Guid") in vps, f"{name}: comment {c.get('Guid')} links to unknown viewpoint {vp.get('Guid')}")
+                link = vps[vp.get("Guid")]
+            comments[c.get("Guid")] = {"date": instant(c.findtext("Date")), "author": c.findtext("Author"),
+                                       "text": c.findtext("Comment") or "", "viewpoint": link}
         topics[tp.get("Guid")] = {
             "title": tp.findtext("Title"), "type": tp.get("TopicType"), "status": tp.get("TopicStatus"),
             "date": instant(tp.findtext("CreationDate")), "author": tp.findtext("CreationAuthor"),
-            "description": tp.findtext("Description"),
+            "description": tp.findtext("Description") or None,  # absent and empty are the same
             "labels": sorted(l.text for l in tp.findall("Labels/Label")),
-            "comments": comments, "viewpoints": vps}
+            "comments": comments, "viewpoints": sorted(vps.values())}
     return topics
 
 
@@ -284,7 +293,7 @@ def created(out, path, guids_file):
     for g, c in zip(guids, exp["create"]):
         t = topics[g]
         need(t["title"] == c["title"], f"topic {g}: title {t['title']!r}, want {c['title']!r}")
-        comps = sorted({x for v in t["viewpoints"].values() for x in v})
+        comps = sorted({x for v in t["viewpoints"] for x in v})
         want = sorted(exp["guids"][n] for n in c["entities"])
         need(t["viewpoints"], f"topic {g}: no viewpoint")
         need(comps == want, f"topic {g}: components {comps}, want IfcGuids {want} of {c['entities']}")
@@ -307,7 +316,7 @@ def issues(out, bim, pdir, path):
         ents = p.get("entities")
         need(isinstance(ents, list) and all(isinstance(e, dict) and "ref" in e for e in ents),
              f"Issue {g}: entities {ents!r} must be a List of Refs")
-        want = sorted({ulid_of[c] for v in t["viewpoints"].values() for c in v})
+        want = sorted({ulid_of[c] for v in t["viewpoints"] for c in v})
         need(sorted(e["ref"] for e in ents) == want, f"Issue {g}: entities {sorted(e['ref'] for e in ents)}, want {want}")
 
 

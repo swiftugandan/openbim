@@ -14,9 +14,15 @@ j=judges/T2.7
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-run() { # run <label> <cmd...>: must exit 0
+[ -x "$py" ] || fail "missing oracle $py (run loop/setup.sh)"
+[ -d .oracles/node/node_modules/gltf-validator ] || fail "missing oracle gltf-validator (run loop/setup.sh)"
+
+# Every subprocess runs under an alarm so a hang in the code under test cannot hang the judge.
+to() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+
+run() { # run <label> <cmd...>: must exit 0 within 120 s
   local label=$1; shift
-  "$@" >"$tmp/out" 2>"$tmp/err" || fail "$label exited $?: $(head -c 400 "$tmp/err")"
+  to 120 "$@" >"$tmp/out" 2>"$tmp/err" || fail "$label exited $? (142 = timeout): $(head -c 400 "$tmp/err")"
 }
 
 round() { # round <tag> <ops files...>
@@ -25,9 +31,9 @@ round() { # round <tag> <ops files...>
   cp "$tmp/out" "$tmp/solve-$tag.json"
   run "bim export --format gltf ($tag)" "$bim" export "$tmp/P" --format gltf --out "$tmp/$tag.gltf"
   [ -s "$tmp/$tag.gltf" ] || fail "export wrote no $tag.gltf"
-  node "$j/validate_gltf.mjs" "$tmp/$tag.gltf" >"$tmp/val" 2>&1 || fail "($tag) $(cat "$tmp/val")"
-  "$py" -I -B "$j/check.py" "$tmp/solve-$tag.json" "$tmp/$tag.gltf" "$@" 2>&1 | tee "$tmp/chk" >&2 \
-    || true
+  to 120 node "$j/validate_gltf.mjs" "$tmp/$tag.gltf" >"$tmp/val" 2>&1 || fail "($tag) $(cat "$tmp/val")"
+  to 300 "$py" -I -B "$j/check.py" "$tmp/solve-$tag.json" "$tmp/$tag.gltf" "$@" >"$tmp/chk" 2>&1 || true
+  cat "$tmp/chk" >&2
   grep -q '^JUDGE FAIL' "$tmp/chk" && exit 1
   grep -q '^T2.7 check:' "$tmp/chk" || fail "($tag) oracle check did not complete"
 }
