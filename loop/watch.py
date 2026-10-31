@@ -164,10 +164,14 @@ def render(s, tick, width, height):
     return rows
 
 
+def quit_on_term(*_):
+    raise KeyboardInterrupt
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     once = "--once" in sys.argv
-    signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt))
+    signal.signal(signal.SIGTERM, quit_on_term)
     fixed = os.path.abspath(args[0]) if args else None
     session = Session(fixed or newest_log())
     tick = 0

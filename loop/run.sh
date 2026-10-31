@@ -30,7 +30,8 @@ block() { # block <id> <reason>: mark [!] with its reason and commit the mark
 gate() { # gate <id>: prints a reason and returns 1 if the work must not be committed
   local id=$1 verdict path ok f
   verdict=$(head -1 ".loop/verdict/$id" 2>/dev/null)
-  [ "$verdict" = PASS ] || { echo "${verdict:-no verdict written}"; return 1; }
+  [ "$(git rev-parse HEAD)" = "$pre" ] || { echo "session made its own commits"; return 1; }
+  [ "$verdict" = PASS ] || { echo "${verdict:-no verdict written (session exit $status: $(tail -c 120 "$log" | tr '\n' ' '))}"; return 1; }
   if [ -n "$(git status --porcelain -- judges loop .gitignore TASKS.md)" ]; then
     echo "session modified judges/, loop/ or TASKS.md"; return 1
   fi
@@ -95,6 +96,7 @@ for ((iter = 1; iter <= MAX_ITER; iter++)); do
   rm -f ".loop/verdict/$id"
   event "SESSION $id attempt $attempt -> $log"
 
+  pre=$(git rev-parse HEAD)
   run_session "$id" "$attempt" "$log"
   status=$?
   [ $status = 142 ] && echo "FAIL: session timed out after ${SESSION_TIMEOUT}s" > ".loop/verdict/$id"
@@ -105,7 +107,9 @@ for ((iter = 1; iter <= MAX_ITER; iter++)); do
   else
     reason=${reason#FAIL: }
     echo "$reason" > ".loop/fail-$id"
-    # Set the failed work aside (kept in `git stash list`) so the next session starts clean.
+    # Set the failed work aside (kept in `git stash list`) so the next session starts clean;
+    # commits the session made on its own are unwound into the stash too.
+    git reset -q --soft "$pre"
     git stash push -u -q -m "loop: $id attempt $attempt failed: $reason" 2>/dev/null
     event "FAILED $id attempt $attempt: $reason"
     [ "$attempt" -ge 2 ] && block "$id" "$reason"
