@@ -1,0 +1,14 @@
+# External judge for T4.4. Builders must not edit anything under judges/.
+[package]
+name = "judge-t4-4"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-struct = { path = "../../crates/engines/structural" }
+
+[dev-dependencies]
+serde_json = "=1.0.149"

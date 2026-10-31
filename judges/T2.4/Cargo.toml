@@ -1,0 +1,16 @@
+# External judge for T2.4. Builders must not edit anything under judges/.
+[package]
+name = "judge-t2-4"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[[bin]]
+name = "judge-t2-4"
+path = "src/main.rs"
+
+[dependencies]
+bim-solver = { path = "../../crates/bim-solver" }
+serde_json = "=1.0.152"

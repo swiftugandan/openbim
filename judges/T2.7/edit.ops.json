@@ -1,0 +1,6 @@
+{"schema": 1, "ops": [
+  {"op": "delete", "id": "N1"},
+  {"op": "delete", "id": "W2"},
+  {"op": "set", "id": "W3", "key": "y1", "value": 0.5},
+  {"op": "set", "id": "D1", "key": "offset", "value": 4.5}
+]}

@@ -1,0 +1,5 @@
+{"schema": 1, "ops": [
+  {"op": "set", "id": "P2", "key": "x", "value": 5.2506},
+  {"op": "set", "id": "N1", "key": "offset", "value": 3.5},
+  {"op": "set", "id": "C1", "key": "x", "value": 8.6}
+]}

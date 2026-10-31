@@ -4,7 +4,7 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-MAX_ITER=${MAX_ITER:-12}              # session attempts before the loop stops on its own
+MAX_ITER=${MAX_ITER:-100}             # session attempts before the loop stops on its own
 SESSION_TIMEOUT=${SESSION_TIMEOUT:-1800}  # seconds; only cuts off a hung session
 MODEL=${LOOP_MODEL:-opus}             # the session itself; stages pick their own models
 mkdir -p .loop/sessions .loop/verdict .loop/attempts .loop/probes
@@ -16,7 +16,8 @@ next_task() { grep -m1 -E '^- \[ \] T[0-9.]+:' TASKS.md | sed -E 's/^- \[ \] (T[
 mark_of()   { grep -m1 -E "^- \[.\] $1:" TASKS.md | cut -c4; }
 block_of()  { awk -v id="$1" '/^- \[.\] /{on = (index($0, "] " id ":") > 0)} on' TASKS.md; }
 field()     { block_of "$1" | sed -nE "s/^  - $2: //p" | head -1; }
-files_of()  { field "$1" Files | tr ',' '\n' | sed -E 's/^ +| +$//g' | grep -v '^$'; }
+list_of()   { field "$1" "$2" | tr ',' '\n' | sed -E 's/^ +| +$//g' | grep -v '^$'; }
+files_of()  { list_of "$1" Files; }
 
 tick() { ID=$1 perl -pi -e 's/^- \[ \] (\Q$ENV{ID}\E:)/- [x] $1/' TASKS.md; }
 block() { # block <id> <reason>: mark [!] with its reason and commit the mark
@@ -32,16 +33,21 @@ gate() { # gate <id>: prints a reason and returns 1 if the work must not be comm
   verdict=$(head -1 ".loop/verdict/$id" 2>/dev/null)
   [ "$(git rev-parse HEAD)" = "$pre" ] || { echo "session made its own commits"; return 1; }
   [ "$verdict" = PASS ] || { echo "${verdict:-no verdict written (session exit $status: $(tail -c 120 "$log" | tr '\n' ' '))}"; return 1; }
-  if [ -n "$(git status --porcelain -- judges loop .gitignore TASKS.md)" ]; then
-    echo "session modified judges/, loop/ or TASKS.md"; return 1
+  if [ -n "$(git status --porcelain -- judges loop spec .gitignore TASKS.md)" ]; then
+    echo "session modified judges/, loop/, spec/ or TASKS.md"; return 1
   fi
   while read -r path; do
     ok=0
     while read -r f; do [[ "$path" == "$f" || "$path" == "$f"* ]] && ok=1; done < <(files_of "$id")
     [ $ok = 1 ] || { echo "changed $path outside Files:"; return 1; }
   done < <(git status --porcelain --untracked-files=all | cut -c4-)
-  perl -e 'alarm 300; exec @ARGV' bash -c "$(field "$id" Verification)" > ".loop/gate-$id.log" 2>&1 \
+  perl -e 'alarm 900; exec @ARGV' bash -c "$(field "$id" Verification)" > ".loop/gate-$id.log" 2>&1 \
     || { echo "loop's own Verification run failed"; return 1; }
+  # Regression gate: every task already done must still pass its own judge.
+  for done in $(grep -E '^- \[x\] T[0-9.]+:' TASKS.md | sed -E 's/^- \[x\] (T[0-9.]+):.*/\1/'); do
+    perl -e 'alarm 900; exec @ARGV' bash -c "$(field "$done" Verification)" >> ".loop/gate-$id.log" 2>&1 \
+      || { echo "regression: $done's Verification now fails"; return 1; }
+  done
 }
 
 commit_pass() {
@@ -67,7 +73,11 @@ run_session() { # run_session <id> <attempt> <log>
 Attempt $((attempt - 1)) failed: $(cat ".loop/fail-$id" 2>/dev/null). You start again from the
 committed tree; avoid that failure.
 "
+  local builder effort=""
+  builder=$(field "$id" Builder); builder=${builder:-opus}
+  [ "$builder" = opus ] && effort=", effort \`medium\`"
   ID=$id ATTEMPT=$attempt BLOCK=$(block_of "$id") VERIFY=$(field "$id" Verification) PREVIOUS=$previous \
+    BUILDER=$builder EFFORT=$effort \
     perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/g' loop/prompt.md > "${log%.jsonl}.prompt.md"
   perl -e 'alarm shift; exec @ARGV' "$SESSION_TIMEOUT" \
     claude -p --model "$MODEL" --permission-mode bypassPermissions \
@@ -88,6 +98,9 @@ for ((iter = 1; iter <= MAX_ITER; iter++)); do
     [ "$(mark_of "$dep" 2>/dev/null)" = "!" ] && dep_blocked=$dep
   done
   if [ -n "$dep_blocked" ]; then block "$id" "Opens $dep_blocked, which is blocked"; ((iter--)); continue; fi
+  missing=""
+  for need in $(list_of "$id" Needs); do [ -e "$need" ] || missing=$need; done
+  if [ -n "$missing" ]; then block "$id" "Needs $missing, which does not exist (see loop/setup.sh)"; ((iter--)); continue; fi
 
   attempt=$(( $(cat ".loop/attempts/$id" 2>/dev/null || echo 0) + 1 ))
   echo "$attempt" > ".loop/attempts/$id"

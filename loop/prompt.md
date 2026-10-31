@@ -9,7 +9,10 @@ The Spec bullet above is the contract. Its Verification is: `{{VERIFY}}`
 {{PREVIOUS}}
 ## Hard rules for you and every subagent
 
-- Change only paths listed under Files:. Never edit `judges/`, `loop/`, `TASKS.md` or `.gitignore`.
+- Change only paths listed under Files:. Never edit `judges/`, `loop/`, `spec/`, `TASKS.md` or `.gitignore`.
+- `spec/` holds the frozen contracts (schema, CLI, MCP, plugins, web); follow them exactly.
+- The loop also reruns every earlier task's Verification after yours; do not break them.
+- Oracles used by judges live in `.oracles/` (Python: `.oracles/py/bin/python`); you may use them to test.
 - Do not run `git commit`, `git add`, `git stash`, `git reset` or `git checkout`; the loop commits for you.
 - Scratch work and probes go under `.loop/probes/{{ID}}/` (git-ignored). Cargo builds for probes use `CARGO_TARGET_DIR=.build/probes`.
 - No network services, no credentials, no external crates unless the Spec names them.
@@ -22,11 +25,12 @@ Give each subagent everything it needs in the prompt: it starts with fresh conte
 
 1. **SCOUT**: Agent, model `haiku`, description `SCOUT: {{ID}}`.
    Read-only. Report what already exists that this task touches or depends on: the workspace
-   layout, the crates named under Opens:, their public APIs, and the judge files for this task.
+   layout, the crates named under Opens:, their public APIs, the `spec/` sections the task cites,
+   and the judge files for this task.
    Keep the report short.
 
-2. **BUILD**: Agent, model `opus`, effort `medium`, description `BUILD: {{ID}}`.
-   Give it the task block, the hard rules and the Scout report. It implements the Spec with
+2. **BUILD**: Agent, model `{{BUILDER}}`{{EFFORT}}, description `BUILD: {{ID}}`.
+   Give it the task block, the hard rules, the relevant `spec/` files and the Scout report. It implements the Spec with
    structurally sound code (no special-casing the judge's inputs), runs `{{VERIFY}}` until it
    exits 0, and reports what it built and which claims it makes.
 

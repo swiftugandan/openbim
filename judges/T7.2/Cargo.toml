@@ -1,0 +1,13 @@
+# External judge for T7.2. Builders must not edit anything under judges/.
+[package]
+name = "judge-t7-2"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-doc = { path = "../../crates/bim-doc" }
+bim-geom = { path = "../../crates/bim-geom" }
+bim-render = { path = "../../crates/bim-render" }

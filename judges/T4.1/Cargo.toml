@@ -1,0 +1,15 @@
+# External judge for T4.1 (Rust API half). Builders must not edit anything under judges/.
+[package]
+name = "judge-t4-1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-plugin = { path = "../../crates/bim-plugin" }
+# Only to name `serde_json::Value` in the TradeEngine signature (spec/plugins.md). Deliberately a caret
+# requirement, not an exact pin: it must unify with whatever serde_json 1.x bim-plugin itself uses,
+# or the trait's `serde_json::Value` and ours would be different types.
+serde_json = "1"

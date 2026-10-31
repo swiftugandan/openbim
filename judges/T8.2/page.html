@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>T8.2 judge page</title>
+<script type="importmap">__IMPORTMAP__</script>
+<style>
+  html, body { margin: 0; background: #fff; }
+  canvas { display: block; width: 1000px; height: 600px; margin: 0 0 10px 0; }
+</style>
+</head>
+<body>
+<canvas id="a"></canvas>
+<canvas id="b"></canvas>
+<canvas id="c"></canvas>
+<script type="module">
+window.__frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
+window.__pageReady = true;
+</script>
+</body>
+</html>

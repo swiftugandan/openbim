@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/.build/judges"
-cargo build -q --offline -p bim-cli
+cargo build -q -p bim-cli
 bim="$CARGO_TARGET_DIR/debug/bim"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

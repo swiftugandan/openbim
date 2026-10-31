@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>T8.1 judge page</title>
+<script type="importmap">__IMPORTMAP__</script>
+<style>
+  html, body { margin: 0; background: #fff; }
+  canvas { display: block; width: 400px; height: 300px; margin: 0 0 8px 0; }
+</style>
+</head>
+<body>
+<canvas id="a" width="400" height="300"></canvas>
+<canvas id="b" width="400" height="300"></canvas>
+<canvas id="c" width="400" height="300"></canvas>
+<canvas id="d" width="400" height="300"></canvas>
+<script type="module">
+// Record every WebGL2 buffer upload so the judge can tell wasm-memory views from copies.
+const uploads = (window.__uploads = []);
+for (const name of ["bufferData", "bufferSubData"]) {
+  const orig = WebGL2RenderingContext.prototype[name];
+  WebGL2RenderingContext.prototype[name] = function (target, src, ...rest) {
+    if (src && typeof src === "object") {
+      const buf = ArrayBuffer.isView(src) ? src.buffer : src;
+      const mem = window.__mem;
+      uploads.push({ fn: name, wasm: !!mem && buf === mem.buffer, bytes: src.byteLength ?? 0 });
+    }
+    return orig.call(this, target, src, ...rest);
+  };
+}
+window.__frames = () => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(r))));
+window.__pageReady = true;
+</script>
+</body>
+</html>

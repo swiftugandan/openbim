@@ -3,4 +3,4 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export CARGO_TARGET_DIR="$PWD/.build/judges"
-cargo test -q --offline --manifest-path judges/T1.3/Cargo.toml
+cargo test -q --manifest-path judges/T1.3/Cargo.toml

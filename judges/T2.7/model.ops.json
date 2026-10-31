@@ -1,0 +1,32 @@
+{"schema": 1, "ops": [
+  {"op": "create", "id": "L1", "kind": "Level", "props": {"elevation": 0.0}},
+  {"op": "create", "id": "L2", "kind": "Level", "props": {"elevation": 3.5}},
+  {"op": "create", "id": "WT_layered", "kind": "WallType", "props": {
+    "layer_thickness": [0.1, 0.15, 0.05], "layer_material": ["gypsum", "concrete", "render"],
+    "layer_conductivity": [0.25, 1.4, 0.8]}},
+  {"op": "create", "id": "WT_brick", "kind": "WallType", "props": {
+    "layer_thickness": [0.2], "layer_material": ["brick"], "layer_conductivity": [0.7]}},
+  {"op": "create", "id": "WT_thick", "kind": "WallType", "props": {
+    "layer_thickness": [0.12, 0.18], "layer_material": ["insulation", "block"], "layer_conductivity": [0.04, 0.9]}},
+  {"op": "create", "id": "M1", "kind": "Material", "props": {"name": "steel", "E": 2.1e11, "G": 8.1e10, "density": 7850, "fy": 3.55e8}},
+
+  {"op": "create", "id": "W1", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 0, "y1": 0, "x2": 6, "y2": 0, "height": 3.0, "type": {"ref": "WT_layered"}}},
+  {"op": "create", "id": "W2", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 6.0000005, "y1": 0, "x2": 6, "y2": 4, "height": 3.0, "type": {"ref": "WT_layered"}}},
+  {"op": "create", "id": "W3", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 3, "y1": 0, "x2": 3, "y2": 4, "height": 3.0, "type": {"ref": "WT_brick"}}},
+  {"op": "create", "id": "W4", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 10, "y1": 0, "x2": 14, "y2": 0, "height": 2.8, "type": {"ref": "WT_brick"}}},
+  {"op": "create", "id": "W5", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 14, "y1": 3, "x2": 14, "y2": 0, "height": 2.8, "type": {"ref": "WT_thick"}}},
+  {"op": "create", "id": "W6", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 0, "y1": 10, "x2": 5, "y2": 12, "height": 2.5, "base_offset": 0.5, "type": {"ref": "WT_brick"}}},
+  {"op": "create", "id": "W7", "kind": "Wall", "props": {"level": {"ref": "L2"}, "x1": 20, "y1": 5, "x2": 20, "y2": 0, "height": 3.0, "type": {"ref": "WT_layered"}}},
+
+  {"op": "create", "id": "D1", "kind": "Opening", "props": {"host": {"ref": "W1"}, "kind": "door", "offset": 1.0, "sill": 0.0, "width": 0.9, "height": 2.1}},
+  {"op": "create", "id": "N1", "kind": "Opening", "props": {"host": {"ref": "W2"}, "kind": "window", "offset": 1.0, "sill": 0.9, "width": 1.2, "height": 1.2}},
+  {"op": "create", "id": "N2", "kind": "Opening", "props": {"host": {"ref": "W7"}, "kind": "window", "offset": 0.5, "sill": 1.0, "width": 1.5, "height": 1.0}},
+
+  {"op": "create", "id": "S1", "kind": "Slab", "props": {"level": {"ref": "L1"}, "boundary": [0, 0, 6, 0, 6, 4, 0, 4], "thickness": 0.2}},
+  {"op": "create", "id": "SO1", "kind": "SlabOpening", "props": {"host": {"ref": "S1"}, "boundary": [1, 1, 2, 1, 2, 2, 1, 2]}},
+  {"op": "create", "id": "S2", "kind": "Slab", "props": {"level": {"ref": "L2"}, "boundary": [0, 0, 6, 0, 6, 2, 3, 2, 3, 4, 0, 4], "thickness": 0.25}},
+
+  {"op": "create", "id": "C1", "kind": "Column", "props": {"x": 8, "y": 8, "base": {"ref": "L1"}, "top": {"ref": "L2"}, "section_b": 0.3, "section_h": 0.4, "material": {"ref": "M1"}}},
+  {"op": "create", "id": "B1", "kind": "Beam", "props": {"level": {"ref": "L2"}, "x1": 8.5, "y1": 8, "x2": 12, "y2": 10, "section_b": 0.2, "section_h": 0.5, "material": {"ref": "M1"}}},
+  {"op": "create", "id": "B2", "kind": "Beam", "props": {"level": {"ref": "L2"}, "x1": 15, "y1": 8, "x2": 18, "y2": 8, "section_b": 0.25, "section_h": 0.4, "z_offset": 0.3, "material": {"ref": "M1"}}}
+]}

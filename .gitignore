@@ -3,3 +3,8 @@
 target/
 judges/**/Cargo.lock
 .DS_Store
+node_modules/
+.oracles/
+corpus/
+packages/bim-wasm/pkg-*/
+apps/studio/dist/

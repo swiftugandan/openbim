@@ -1,0 +1,14 @@
+# External judge for T3.1. Builders must not edit anything under judges/.
+[package]
+name = "judge-t3-1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-doc = { path = "../../crates/bim-doc" }
+bim-model = { path = "../../crates/bim-model" }
+bim-incr = { path = "../../crates/bim-incr" }
+bim-draw = { path = "../../crates/bim-draw" }

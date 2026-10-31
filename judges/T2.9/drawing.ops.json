@@ -1,0 +1,26 @@
+{"schema": 1, "ops": [
+  {"op": "create", "id": "L1", "kind": "Level", "props": {"elevation": 0.0}},
+  {"op": "create", "id": "L2", "kind": "Level", "props": {"elevation": 3.0}},
+  {"op": "create", "id": "WT", "kind": "WallType", "props": {
+    "layer_thickness": [0.2], "layer_material": ["brick"], "layer_conductivity": [0.7]}},
+  {"op": "create", "id": "WT2", "kind": "WallType", "props": {
+    "layer_thickness": [0.1, 0.15], "layer_material": ["gypsum", "concrete"], "layer_conductivity": [0.25, 1.4]}},
+  {"op": "create", "id": "M1", "kind": "Material", "props": {"name": "steel", "E": 2.1e11, "G": 8.1e10, "density": 7850, "fy": 3.55e8}},
+
+  {"op": "create", "id": "W1", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 0, "y1": 0, "x2": 6, "y2": 0, "height": 2.7, "type": {"ref": "WT"}}},
+  {"op": "create", "id": "W2", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 6, "y1": 0, "x2": 6, "y2": 4, "height": 2.7, "type": {"ref": "WT"}}},
+  {"op": "create", "id": "W3", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 6, "y1": 4, "x2": 0, "y2": 4, "height": 2.7, "type": {"ref": "WT"}}},
+  {"op": "create", "id": "W4", "kind": "Wall", "props": {"level": {"ref": "L1"}, "x1": 0, "y1": 4, "x2": 0, "y2": 0, "height": 2.7, "type": {"ref": "WT"}}},
+  {"op": "create", "id": "W5", "kind": "Wall", "props": {"level": {"ref": "L2"}, "x1": 1, "y1": 6, "x2": 5, "y2": 9, "height": 2.5, "type": {"ref": "WT2"}}},
+
+  {"op": "create", "id": "D1", "kind": "Opening", "props": {"host": {"ref": "W1"}, "kind": "door", "offset": 1.0, "sill": 0.0, "width": 0.9, "height": 2.1}},
+  {"op": "create", "id": "N1", "kind": "Opening", "props": {"host": {"ref": "W3"}, "kind": "window", "offset": 2.0, "sill": 0.9, "width": 1.5, "height": 1.2}},
+
+  {"op": "create", "id": "S1", "kind": "Slab", "props": {"level": {"ref": "L1"}, "boundary": [-0.5, -0.5, 6.5, -0.5, 6.5, 4.5, -0.5, 4.5], "thickness": 0.2}},
+  {"op": "create", "id": "SO1", "kind": "SlabOpening", "props": {"host": {"ref": "S1"}, "boundary": [4, 1, 5, 1, 5, 2.5, 4, 2.5]}},
+  {"op": "create", "id": "C1", "kind": "Column", "props": {"x": 8, "y": 2, "base": {"ref": "L1"}, "top": {"ref": "L2"}, "section_b": 0.3, "section_h": 0.4, "material": {"ref": "M1"}}},
+
+  {"op": "create", "id": "P1", "kind": "Point", "props": {"x": 1.0, "y": -1.5}},
+  {"op": "create", "id": "P2", "kind": "Point", "props": {"x": 5.0, "y": -1.5}},
+  {"op": "create", "id": "DIM1", "kind": "Dimension", "props": {"a": {"ref": "P1"}, "b": {"ref": "P2"}, "view": "plan:L1@1.2"}}
+]}

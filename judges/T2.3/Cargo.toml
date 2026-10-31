@@ -1,0 +1,11 @@
+# External judge for T2.3. Builders must not edit anything under judges/.
+[package]
+name = "judge-t2-3"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-spatial = { path = "../../crates/bim-spatial" }

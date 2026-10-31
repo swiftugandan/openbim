@@ -1,0 +1,21 @@
+# External judge for T1.7. Builders must not edit anything under judges/.
+[package]
+name = "judge-t1-7"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-doc = { path = "../../crates/bim-doc" }
+bim-crdt = { path = "../../crates/bim-crdt" }
+
+[dev-dependencies]
+proptest = { version = "=1.9.0", default-features = false, features = ["std"] }
+
+# 10,000 multi-peer cases must finish well inside a minute.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.test]
+opt-level = 2
