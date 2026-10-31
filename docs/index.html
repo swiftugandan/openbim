@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>openbim</title>
+<meta name="description" content="An open, deterministic building model you can compile, diff, merge and test like source code. Rust, for the command line and the browser. Under construction.">
+<meta property="og:title" content="openbim">
+<meta property="og:description" content="An open, deterministic building model you can compile, diff, merge and test like source code. Rust, for the command line and the browser. Under construction.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://swiftugandan.github.io/openbim/">
+<meta name="color-scheme" content="light dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Public+Sans:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one drawing sheet. Grid-reference border, a plan drawing as the hero, a drawing register,
+   and a title block as the footer. Lineweights (ISO 128) are the structural device. */
+:root {
+  --paper: #eef1ef;      /* cool drafting film, grey-green bias */
+  --sheet: #f7f8f7;
+  --ink: #18201f;
+  --ink-2: #4c5856;      /* secondary ink */
+  --rule: #b9c3c0;       /* construction lines */
+  --hatch: #8a9693;
+  --dim: #0c6f7c;        /* the dimension layer: the one accent */
+  --dim-soft: #d6e9eb;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --w-cut: 2.4px; --w-proj: 1.2px; --w-thin: 0.8px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #0f1413; --sheet: #141a19; --ink: #e3e9e7; --ink-2: #9aa7a4; --rule: #2c3634;
+    --hatch: #5d6a67; --dim: #5cc6d3; --dim-soft: #12343a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #0f1413; --sheet: #141a19; --ink: #e3e9e7; --ink-2: #9aa7a4; --rule: #2c3634;
+  --hatch: #5d6a67; --dim: #5cc6d3; --dim-soft: #12343a; color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--paper); color: var(--ink); font: 400 16px/1.6 var(--body);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px 40px;
+}
+a { color: var(--dim); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--dim); outline-offset: 3px; }
+code, pre, .mono { font-family: var(--mono); }
+
+.sheet {
+  max-width: 1120px; margin: 0 auto; background: var(--sheet);
+  border: var(--w-cut) solid var(--ink); position: relative;
+}
+/* grid-reference border, as on a drawing sheet */
+.refs { display: flex; justify-content: space-around; border-bottom: var(--w-thin) solid var(--ink);
+  font: 500 11px/1 var(--mono); color: var(--ink-2); padding: 6px 0; letter-spacing: .08em; }
+.refs.bottom { border-bottom: 0; border-top: var(--w-thin) solid var(--ink); }
+.inner { padding: clamp(20px, 4vw, 48px); display: grid; gap: clamp(48px, 7vw, 88px); }
+
+h1, h2, h3 { font-family: var(--display); font-weight: 700; text-transform: uppercase;
+  letter-spacing: .02em; line-height: 1; margin: 0; text-wrap: balance; }
+h2 { font-size: clamp(28px, 4vw, 40px); }
+h3 { font-size: 20px; letter-spacing: .04em; font-weight: 600; }
+p { margin: 0; }
+.label { font: 500 12px/1.3 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--ink-2); }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); gap: clamp(24px, 4vw, 56px); align-items: center; }
+.hero-copy { display: grid; gap: 20px; min-width: 0; }
+h1 { font-size: clamp(64px, 11vw, 132px); letter-spacing: -.01em; }
+h1 .thin { font-weight: 500; color: var(--ink-2); }
+.lede { font-size: clamp(18px, 2vw, 21px); line-height: 1.5; max-width: 34ch; }
+.status { display: inline-flex; align-items: center; gap: 10px; justify-self: start;
+  border: var(--w-thin) solid var(--dim); background: var(--dim-soft); color: var(--ink);
+  padding: 6px 12px; font: 500 13px/1.3 var(--mono); }
+.status .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); flex: none; }
+@media (prefers-reduced-motion: no-preference) { .status .dot { animation: blink 2.4s ease-in-out infinite; } }
+@keyframes blink { 50% { opacity: .25; } }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.btn { display: inline-block; padding: 11px 18px; font: 600 15px/1 var(--body); text-decoration: none;
+  border: var(--w-proj) solid var(--ink); color: var(--ink); }
+.btn.primary { background: var(--ink); color: var(--sheet); }
+.btn:hover { border-color: var(--dim); }
+.btn.primary:hover { background: var(--dim); border-color: var(--dim); color: var(--sheet); }
+.plan { width: 100%; height: auto; max-width: 100%; display: block; }
+.plan text { font-family: var(--mono); fill: var(--ink-2); }
+.caption { margin-top: 8px; display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+
+/* Lineweight divider */
+.weights { display: grid; gap: 6px; }
+.weights div { display: flex; align-items: center; gap: 12px; }
+.weights span.l { flex: 1; border-top-style: solid; border-top-color: var(--ink); }
+.weights .c { width: 150px; flex: none; }
+
+/* Register */
+.section-head { display: grid; gap: 12px; max-width: 62ch; }
+.register-wrap { overflow-x: auto; margin-top: 28px; }
+table.register { width: 100%; border-collapse: collapse; min-width: 640px; }
+.register th { text-align: left; font: 500 11px/1.2 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-2); padding: 0 12px 10px 0; border-bottom: var(--w-proj) solid var(--ink); }
+.register td { padding: 16px 12px 16px 0; border-bottom: var(--w-thin) solid var(--rule); vertical-align: top; }
+.register td.no { font: 600 15px/1.4 var(--mono); color: var(--dim); white-space: nowrap; }
+.register td.t { font: 600 19px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; width: 22%; }
+.register td.d { color: var(--ink-2); font-size: 15px; }
+.register td.k { font: 400 13px/1.5 var(--mono); color: var(--ink-2); white-space: nowrap; }
+
+/* Judges */
+.judges { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(24px, 4vw, 56px); }
+.oracles { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+.oracles span { font: 400 13px/1 var(--mono); border: var(--w-thin) solid var(--rule); padding: 7px 9px; }
+.bars { display: grid; gap: 0; align-content: start; }
+.bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 16px; padding: 18px 0;
+  border-bottom: var(--w-thin) solid var(--rule); }
+.bar:nth-child(2) { border-top: var(--w-proj) solid var(--ink); }
+.bar .v { font: 700 34px/1 var(--display); color: var(--dim); font-variant-numeric: tabular-nums; text-align: right; }
+.bar .n { font-weight: 600; }
+.bar .s { grid-column: 1 / -1; color: var(--ink-2); font-size: 14px; }
+
+/* Loop */
+.loop { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); margin-top: 28px;
+  border-top: var(--w-proj) solid var(--ink); }
+.stage { padding: 16px 14px 16px 0; display: grid; gap: 8px; align-content: start; position: relative; }
+.stage + .stage { padding-left: 14px; border-left: var(--w-thin) dashed var(--rule); }
+.stage .i { font: 500 12px/1 var(--mono); color: var(--dim); }
+.stage h3 { font-size: 22px; }
+.stage p { font-size: 14px; color: var(--ink-2); line-height: 1.5; }
+.note { margin-top: 20px; max-width: 70ch; color: var(--ink-2); }
+
+/* CLI */
+.cli { display: grid; grid-template-columns: minmax(0, .8fr) minmax(0, 1.2fr); gap: clamp(24px, 4vw, 56px); align-items: start; }
+pre { margin: 0; overflow-x: auto; background: var(--paper); border: var(--w-thin) solid var(--rule);
+  padding: 18px 20px; font-size: 13.5px; line-height: 1.7; }
+pre .c { color: var(--ink-2); }
+pre .p { color: var(--dim); user-select: none; }
+
+/* Title block */
+.titleblock { display: grid; grid-template-columns: 2fr 1fr 1fr 1fr; border-top: var(--w-cut) solid var(--ink); }
+.titleblock > div { padding: 10px 14px; border-left: var(--w-thin) solid var(--ink); display: grid; gap: 4px; min-width: 0; }
+.titleblock > div:first-child { border-left: 0; }
+.titleblock .label { font-size: 10px; }
+.titleblock .val { font: 600 17px/1.2 var(--display); text-transform: uppercase; letter-spacing: .03em; overflow-wrap: anywhere; }
+.titleblock .big { font-size: 26px; }
+
+@media (max-width: 860px) {
+  .hero, .judges, .cli { grid-template-columns: minmax(0, 1fr); }
+  .loop { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .stage + .stage { padding-left: 0; border-left: 0; }
+  .stage { border-bottom: var(--w-thin) dashed var(--rule); padding-right: 14px; }
+  .stage:nth-child(even) { padding-left: 14px; border-left: var(--w-thin) dashed var(--rule); }
+  .titleblock { grid-template-columns: 1fr 1fr; }
+  .titleblock > div:nth-child(3) { border-left: 0; }
+  .titleblock > div:nth-child(n+3) { border-top: var(--w-thin) solid var(--ink); }
+  .weights .c { width: 110px; }
+}
+@media (max-width: 480px) { .refs span:nth-child(even) { display: none; } }
+</style>
+
+</head>
+<body>
+<div class="sheet">
+  <div class="refs" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div>
+  <div class="inner">
+
+    <header class="hero">
+      <div class="hero-copy">
+        <span class="label">Open building information modelling</span>
+        <h1>open<span class="thin">bim</span></h1>
+        <p class="lede">A building model you can compile, diff, merge and test like source code. Written in Rust, for the command line and the browser.</p>
+        <span class="status"><span class="dot" aria-hidden="true"></span>Rev 0 · under construction · 45 tasks planned</span>
+        <div class="actions">
+          <a class="btn primary" href="https://github.com/swiftugandan/openbim">View on GitHub</a>
+          <a class="btn" href="https://github.com/swiftugandan/openbim/blob/main/TASKS.md">Read the build plan</a>
+        </div>
+      </div>
+
+      <figure style="margin:0; min-width:0">
+        <svg class="plan" viewBox="0 0 520 400" role="img" aria-labelledby="plan-t">
+          <title id="plan-t">Floor plan of two rooms: cut walls hatched, a door swing, a dimension of 6000 mm and section mark A</title>
+          <defs>
+            <pattern id="hatch" width="7" height="7" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <line x1="0" y1="0" x2="0" y2="7" stroke="var(--hatch)" stroke-width="1"/>
+            </pattern>
+          </defs>
+          <!-- grid lines -->
+          <g stroke="var(--rule)" stroke-width="0.8" stroke-dasharray="14 4 2 4" fill="none">
+            <line x1="70" y1="20" x2="70" y2="352"/><line x1="430" y1="20" x2="430" y2="352"/>
+            <line x1="30" y1="70" x2="478" y2="70"/><line x1="30" y1="310" x2="478" y2="310"/>
+          </g>
+          <g font-size="11" text-anchor="middle">
+            <circle cx="70" cy="14" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="70" y="18">A</text>
+            <circle cx="430" cy="14" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="430" y="18">B</text>
+            <circle cx="490" cy="70" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="490" y="74">1</text>
+            <circle cx="490" cy="310" r="10" fill="var(--sheet)" stroke="var(--ink-2)" stroke-width="0.8"/><text x="490" y="314">2</text>
+          </g>
+          <!-- cut walls: outer ring with door and window openings, inner partition -->
+          <path fill="url(#hatch)" stroke="var(--ink)" stroke-width="2.4" stroke-linejoin="miter" fill-rule="evenodd"
+            d="M62 62 H438 V318 H300 V306 H426 V74 H74 V306 H240 V318 H62 Z"/>
+          <path fill="url(#hatch)" stroke="var(--ink)" stroke-width="2.4" d="M262 74 H272 V170 H262 Z M262 218 H272 V306 H262 Z"/>
+          <!-- window in north wall: projection lines -->
+          <g stroke="var(--ink)" stroke-width="1.2">
+            <rect x="120" y="62" width="90" height="12" fill="var(--sheet)"/>
+            <line x1="120" y1="68" x2="210" y2="68"/>
+            <rect x="320" y="62" width="70" height="12" fill="var(--sheet)"/>
+            <line x1="320" y1="68" x2="390" y2="68"/>
+          </g>
+          <!-- door swings -->
+          <g fill="none" stroke="var(--ink)" stroke-width="1.2">
+            <line x1="240" y1="312" x2="240" y2="252"/>
+            <path d="M240 252 A60 60 0 0 1 300 312" stroke-width="0.8" stroke-dasharray="4 3"/>
+            <line x1="272" y1="170" x2="312" y2="170"/>
+            <path d="M312 170 A48 48 0 0 1 272 218" stroke-width="0.8" stroke-dasharray="4 3"/>
+          </g>
+          <!-- room tags -->
+          <g text-anchor="middle">
+            <text x="168" y="188" font-size="12" style="fill:var(--ink)">L1/1</text>
+            <text x="168" y="204" font-size="10.5">11.10 m²</text>
+            <text x="350" y="188" font-size="12" style="fill:var(--ink)">L1/2</text>
+            <text x="350" y="204" font-size="10.5">9.09 m²</text>
+          </g>
+          <!-- dimension layer -->
+          <g stroke="var(--dim)" stroke-width="0.8" fill="none">
+            <line x1="62" y1="362" x2="62" y2="330"/><line x1="438" y1="362" x2="438" y2="330"/>
+            <line x1="62" y1="352" x2="438" y2="352"/>
+            <line x1="57" y1="357" x2="67" y2="347" stroke-width="1.6"/><line x1="433" y1="357" x2="443" y2="347" stroke-width="1.6"/>
+          </g>
+          <text x="250" y="346" text-anchor="middle" font-size="12" style="fill:var(--dim)">6000</text>
+          <!-- section mark A-A -->
+          <g stroke="var(--ink)" stroke-width="1.2" fill="none">
+            <line x1="30" y1="240" x2="52" y2="240" stroke-width="2.4"/><line x1="448" y1="240" x2="470" y2="240" stroke-width="2.4"/>
+            <line x1="52" y1="240" x2="448" y2="240" stroke-width="0.8" stroke-dasharray="18 4 3 4"/>
+          </g>
+          <path d="M30 240 L22 228 L38 228 Z M470 240 L462 228 L478 228 Z" fill="var(--ink)"/>
+          <text x="30" y="222" text-anchor="middle" font-size="11" style="fill:var(--ink)">A</text>
+          <text x="470" y="222" text-anchor="middle" font-size="11" style="fill:var(--ink)">A</text>
+        </svg>
+        <figcaption class="caption label"><span>Plan: L1 @ 1.2 m</span><span>Scale 1:100</span></figcaption>
+      </figure>
+    </header>
+
+    <div class="weights" aria-hidden="true">
+      <div><span class="c label">Cut 0.50 mm</span><span class="l" style="border-top-width:var(--w-cut)"></span></div>
+      <div><span class="c label">Projection 0.25 mm</span><span class="l" style="border-top-width:var(--w-proj)"></span></div>
+      <div><span class="c label">Hidden 0.18 mm</span><span class="l" style="border-top-width:var(--w-thin); border-top-style:dashed"></span></div>
+    </div>
+
+    <section aria-labelledby="register-h">
+      <div class="section-head">
+        <span class="label">Drawing register</span>
+        <h2 id="register-h">One model. Every discipline. No black boxes.</h2>
+        <p>The document is the source of truth. Geometry, rooms, structural results, pipe pressures and drawings are all derived from it, deterministically, so the same model always produces the same answer, on your laptop or in the browser.</p>
+      </div>
+      <div class="register-wrap">
+        <table class="register">
+          <thead><tr><th>Sheet</th><th>Title</th><th>Contents</th><th>Tasks</th></tr></thead>
+          <tbody>
+            <tr><td class="no">K-100</td><td class="t">Kernel</td><td class="d">Content-addressed document graph with an op log. CRDT merging with conflicts recorded in the model, not hidden. SQLite revisions, live sync, incremental recomputation.</td><td class="k">T1.1–T1.7<br>T3.1–T3.3</td></tr>
+            <tr><td class="no">G-200</td><td class="t">Geometry</td><td class="d">2D and 3D constraint solving with degree-of-freedom analysis, exact predicates, B-Rep solids with Boolean CSG, R*-tree and BVH, plane sections and exact hidden-line removal.</td><td class="k">T2.1–T2.6</td></tr>
+            <tr><td class="no">D-300</td><td class="t">Drawings</td><td class="d">Plans, sections and elevations with ISO lineweights, hatches and associative dimensions. SVG, PDF and DXF sheets.</td><td class="k">T2.7–T2.9<br>T7.4</td></tr>
+            <tr><td class="no">E-400</td><td class="t">Engines</td><td class="d">Architecture: rooms, areas, stairs, curtain walls, take-off. Structure: 3D frames with Timoshenko beams, load combinations, utilisation. MEP: pipe networks, sizing, circuits, clash detection.</td><td class="k">T4.1–T4.7</td></tr>
+            <tr><td class="no">S-500</td><td class="t">Standards</td><td class="d">IFC4 import and export (STEP and JSON), BCF 3.0 issues, and hot-swappable code-rule packs for IBC, Eurocode and accessibility. Rule sets can also ship as sandboxed WebAssembly plugins.</td><td class="k">T5.1–T5.7</td></tr>
+            <tr><td class="no">I-600</td><td class="t">Interfaces</td><td class="d">The <code>bim</code> command line, an MCP server so AI agents can query the model in Datalog and propose checked transactions, and the Studio web app.</td><td class="k">T6.1–T6.3<br>T8.3–T8.4</td></tr>
+            <tr><td class="no">R-700</td><td class="t">Rendering</td><td class="d">WebAssembly with zero-copy typed-array views, a WebGPU viewport with a WebGL2 fallback, Three.js interop, GPU picking, section boxes and a high-DPI sheet viewer.</td><td class="k">T7.1–T7.3<br>T8.1–T8.2</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="judges" aria-labelledby="judges-h">
+      <div class="section-head">
+        <span class="label">Outside judges</span>
+        <h2 id="judges-h">Nothing counts as done until someone else's tool agrees.</h2>
+        <p>Every task is checked by a judge written before the code. Where an independent open-source tool exists, the judge asks it: the same IFC file through ifcopenshell, the same frame through PyNite, the same pipe network through EPANET.</p>
+        <div class="oracles" aria-label="Oracles">
+          <span>ifcopenshell</span><span>manifold3d</span><span>trimesh</span><span>shapely</span><span>PyNite</span><span>WNTR / EPANET</span><span>python-solvespace</span><span>ezdxf</span><span>pypdf</span><span>Khronos glTF Validator</span><span>buildingSMART BCF XSD</span><span>MCP SDK</span><span>axe-core</span>
+        </div>
+      </div>
+      <div class="bars">
+        <span class="label" style="padding-bottom:12px">The bar each judge sets</span>
+        <div class="bar"><span class="n">CRDT merge cases per run</span><span class="v">10,000</span><span class="s">Property-based tests: any merge order converges to the same model.</span></div>
+        <div class="bar"><span class="n">Agreement with analytical results</span><span class="v">0.1 %</span><span class="s">Frames, Timoshenko beams and pipe networks against closed forms and reference solvers.</span></div>
+        <div class="bar"><span class="n">Frame time on 100k elements</span><span class="v">60 fps</span><span class="s">2M triangles, with model edits recomputed in under 50 ms.</span></div>
+        <div class="bar"><span class="n">IFC files that round-trip</span><span class="v">100 %</span><span class="s">Volumes and slab areas match ifcopenshell within 1e-4 after export.</span></div>
+      </div>
+    </section>
+
+    <section aria-labelledby="loop-h">
+      <div class="section-head">
+        <span class="label">How it is built</span>
+        <h2 id="loop-h">One task at a time, in the open.</h2>
+        <p>An autonomous loop works through the plan. Each task gets a fresh Claude Code session that runs these stages, then a gate that trusts none of it.</p>
+      </div>
+      <div class="loop">
+        <div class="stage"><span class="i">01</span><h3>Scout</h3><p>Maps what already exists and what the task touches.</p></div>
+        <div class="stage"><span class="i">02</span><h3>Plan</h3><p>Lays out modules, algorithms and edge cases before code.</p></div>
+        <div class="stage"><span class="i">03</span><h3>Build</h3><p>Implements against the frozen contract.</p></div>
+        <div class="stage"><span class="i">04</span><h3>Check</h3><p>Runs the task's judge, exactly once.</p></div>
+        <div class="stage"><span class="i">05</span><h3>Audit</h3><p>A fresh reviewer writes its own probes to break the claims.</p></div>
+        <div class="stage"><span class="i">06</span><h3>Commit</h3><p>The gate reruns this judge and every earlier one, then commits.</p></div>
+      </div>
+      <p class="note">A failed task gets one fix round and one retry on a stronger model. A task that still fails is marked blocked, with its reason, and so is everything that depends on it.</p>
+    </section>
+
+    <section class="cli" aria-labelledby="cli-h">
+      <div class="section-head">
+        <span class="label">Command line</span>
+        <h2 id="cli-h">Everything the app can do, a script can do.</h2>
+        <p>The CLI contract is frozen in <code>spec/cli.md</code>, so the commands below are what each task must deliver.</p>
+      </div>
+      <pre aria-label="Example bim commands"><span class="p">$ </span>bim init tower
+<span class="p">$ </span>bim apply tower walls.json
+<span class="p">$ </span>bim solve tower --trade struct --json
+<span class="p">$ </span>bim validate tower --standard eurocode --json
+<span class="p">$ </span>bim clash tower --clearance 0.05 --json
+<span class="p">$ </span>bim export tower --format ifc --out tower.ifc
+<span class="p">$ </span>bim export tower --format pdf --view plan:L1@1.2 --out l1.pdf
+<span class="p">$ </span>bim diff tower 3f9c0a1e8d2b4c77 a01be6d94f3c2e58 --json
+<span class="c"># exit 0 ok · 1 found a problem · 2 invalid input · 3 internal error</span></pre>
+    </section>
+
+  </div>
+
+  <footer class="titleblock">
+    <div><span class="label">Project</span><span class="val big">openbim</span></div>
+    <div><span class="label">Status</span><span class="val">Under construction</span></div>
+    <div><span class="label">Licence</span><span class="val">MIT</span></div>
+    <div><span class="label">Rev · Date</span><span class="val">0 · 2026-10-31</span></div>
+  </footer>
+  <div class="refs bottom" aria-hidden="true"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span></div>
+</div>
+</body>
+</html>

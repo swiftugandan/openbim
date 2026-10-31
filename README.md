@@ -2,7 +2,7 @@
 
 An open, deterministic BIM and spatial-engineering platform in Rust, for the native CLI and WebAssembly.
 
-**Status: under construction.** The plan, the frozen contracts and the judges exist; the product code is
+**Status: under construction.** Project page: https://swiftugandan.github.io/openbim/ The plan, the frozen contracts and the judges exist; the product code is
 being built task by task. See `TASKS.md` for progress (`[x]` done, `[ ]` to do, `[!]` blocked).
 
 ## What it will be
