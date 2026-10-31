@@ -1,0 +1,14 @@
+# Sample trade-engine component (openbim:trade@0.1.0) for the T6.3 judge, built for wasm32-wasip2.
+# Builders must not edit anything under judges/.
+[workspace]
+resolver = "2"
+members = ["fire"]
+
+[workspace.dependencies]
+wit-bindgen = "=0.46.0"
+serde_json = "=1.0.140"
+
+[profile.release]
+opt-level = "s"
+debug = false
+strip = true

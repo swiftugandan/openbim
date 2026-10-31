@@ -1,0 +1,18 @@
+# External judge for T4.8 (Rust API half). Builders must not edit anything under judges/.
+[package]
+name = "judge-t4-8"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+bim-plugin = { path = "../../crates/bim-plugin" }
+# Only to name `serde_json::Value` in the TradeEngine signatures (spec/plugins.md). A caret requirement so
+# it unifies with the serde_json 1.x that bim-plugin itself uses.
+serde_json = "1"
+# Built-in engines (constructors pinned in T4.2, T4.5 and T4.6), for the built-in metrics test.
+bim-arch = { path = "../../crates/engines/arch" }
+bim-struct = { path = "../../crates/engines/structural" }
+bim-mep = { path = "../../crates/engines/mep" }

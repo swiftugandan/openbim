@@ -1,0 +1,6 @@
+{"package": "fire", "version": "0.1.0", "abi": "openbim:trade@0.1.0",
+ "kinds": {
+   "fire:Sprinkler": {"props": {"level": "ref", "x": "num", "y": "num", "z": "num", "coverage_radius": "num"},
+                      "geometry": {"box": {"centre": ["x", "y", "z"], "size": [0.1, 0.1, 0.1]}}}
+ },
+ "engine": "fire.wasm"}

@@ -15,6 +15,9 @@ being built task by task. See `TASKS.md` for progress (`[x]` done, `[ ]` to do, 
   Canvas2D sheet viewer.
 - **Engines and standards:** architectural, structural and MEP engines behind a plugin boundary
   (WASM components), IFC4 STEP/JSON, BCF 3.0 and declarative code-rule packs.
+- **Direct modelling:** SketchUp-style drawing, push/pull, follow-me, inference snapping and typed measurements.
+- **Plugins and catalogues:** new trades as sandboxed WebAssembly trade packages with their own element types, and
+  manufacturers' product catalogues (doors, windows, furniture, finishes, roof coverings) with schedules and IFC types.
 - **Interfaces:** the `bim` CLI, the `bim-mcp` Model Context Protocol server, and the Studio web app.
 
 ## How it is built

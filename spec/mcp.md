@@ -13,7 +13,7 @@ without `?` as `required` and types `clearance` as a number.
 |---|---|---|
 | `query` | `{"program": "<datalog>", "query": "<atom>"}` | `{"rows": [[…], …]}` one value per query-atom argument in order (ids as their `_name`), sorted, deduplicated; a parse error or unstratifiable program is a tool error |
 | `get_entity` | `{"id"}` | as `bim show --json` |
-| `propose_transaction` | `{"ops": [JSON ops]}` | `{"tx", "valid", "solver": {"status", "dof"}, "structural": {"max_utilization_before", "max_utilization_after"}, "mep": {"max_dp_before", "max_dp_after"}, "clashes": {"before", "after"}, "violations": {"before", "after", "new": [violation]}, "conflicts": [diagnostic]}` — the document is not changed |
+| `propose_transaction` | `{"ops": [JSON ops]}` | `{"tx", "valid", "solver": {"status", "dof"}, "trades": {"<trade>": {"<metric>": {"before", "after"}}}, "clashes": {"before", "after"}, "violations": {"before", "after", "new": [violation]}, "conflicts": [diagnostic]}` — the document is not changed; `trades` has one entry per `Registry::engine_names()` with that engine's metrics (spec/plugins.md) |
 | `commit_transaction` | `{"tx"}` | `{"hash"}`; error if the document changed since the proposal (stale) or tx unknown |
 | `render_view` | `{"view", "format": "svg"}` | `{"svg": "<svg…>"}` same as `bim export --format svg` |
 | `clash_matrix` | `{"clearance"?}` | as `bim clash --json` |
@@ -35,7 +35,7 @@ Evaluation is semi-naive bottom-up to a fixpoint. Built-in (extensional) relatio
 
 | Relation | Meaning |
 |---|---|
-| `entity(Id, Kind)` | every live entity |
+| `entity(Id, Kind)` | every live entity, extension kinds included (`Kind` is e.g. `"fire:Sprinkler"`) |
 | `prop(Id, Key, Value)` | every Num/Text/Bool prop |
 | `ref(Id, Key, Target)` | every Ref prop (and each Ref in a List, same key) |
 | `room(Room, Level)` | rooms derived by the arch engine (`<level>/<n>` ids) |

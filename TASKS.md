@@ -16,7 +16,7 @@ pypdf, manifold3d, trimesh, shapely, PyNite, WNTR/EPANET, python-solvespace, xml
 BCF XSDs, Khronos glTF-Validator, the official MCP SDK, Playwright (system Chrome) and axe-core;
 otherwise closed-form textbook results. Verifications target under a minute on a warm `.build/` cache
 (Build warms it); cold first compiles of large dependencies take longer, and a few judges are slower by design:
-T7.5 (100k-element bench, ≤ 300 s), T5.4 (≤ 60 s per corpus file), T8.1/T8.3/T8.4 (wasm + app rebuild and a
+T7.5 (100k-element bench, ≤ 300 s), T5.4 (≤ 60 s per corpus file), T8.1 and T8.3 to T8.7 (wasm + app rebuild and a
 browser session, ≤ 150 s), T1.7 (10,000-case proptest with a solver call per case, ≤ 600 s). The loop's gate allows 900 s per judge.
 External crates and npm packages are allowed when a task needs them (pin versions; no network services at run time).
 The loop's gate also reruns every earlier `[x]` task's Verification, so regressions fail the task that caused them.
@@ -47,6 +47,9 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 | 5. Headless CLI (`init apply validate solve clash export diff bench`) | T1.5, T1.6, T3.2, and each engine task |
 | 5. MCP server, Datalog queries, propose/commit transactions, visual feedback | T6.1, T6.2, T6.3 |
 | 5. UI/UX: Studio app (tools, panels, undo, persistence, collaboration, a11y) | T8.3, T8.4 |
+| 4. Pluggable trades: extension kinds, trade packages with WebAssembly engines, generic metrics | T1.8, T4.8, T5.8, T6.3 |
+| 4. Manufacturer and brand catalogues: products, furniture, roofs, finishes, schedules, IFC types, Studio | T4.9, T5.8, T8.5 |
+| 5. Direct modelling (SketchUp-style): drawing, push/pull, follow-me, inference, measurements, components | T2.10, T2.11, T2.12, T5.9, T8.6, T8.7 |
 | 6.1 IFC reference-corpus judge (ifcopenshell oracle) | T5.4 |
 | 6.2 Property-based CRDT judge (10,000 cases) | T1.2, T1.7 |
 | 6.3 Analytical engineering judge (frames, Timoshenko, pipe networks) | T1.4, T4.4, T4.6 |
@@ -99,6 +102,14 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.7.sh
   - Spec: Separate syntactic merge (T1.2, unchanged guarantees) from semantic evaluation: `Replica::evaluate() -> Evaluated { document, diagnostics }` where `document` contains one `ConflictDiagnostic` entity per diagnostic (id derived from `"conflict:" + entity + key + target`, props per spec/schema.md, `reason` one of `dangling_ref`, `constraint_unsatisfiable`, `dependency_cycle`). Constraint entities (spec/schema.md `Constraint`, with `a`/`b` referencing `Point` entities) are evaluated with bim-solver after merge; when concurrent edits make a connected constraint group Inconsistent, every constraint in that group gets a `constraint_unsatisfiable` diagnostic and no geometry is changed. A Ref cycle yields `dependency_cycle` diagnostics. Never panics. Judge uses proptest (10,000 cases) over creates, sets, deletes, constraint mutations and offline splits/merges among 3–5 peers.
   - Details: `Replica::evaluate(&self) -> Evaluated`, `pub struct Evaluated { pub document: bim_doc::Document, pub diagnostics: Vec<Diagnostic> }` with one entry per ConflictDiagnostic node; T1.2's `ConflictDiagnostic` and `diagnostics()` are unchanged; `evaluate` does not mutate the replica and `document()` never contains diagnostic nodes. Node props: `entity` (Ref), `key` (Text), `target` (Ref, when there is one), `reason` (Text). `dangling_ref`: the dangling top-level Ref (same set as `diagnostics()`). `constraint_unsatisfiable`: `entity` = the Constraint. `dependency_cycle`: one node per entity lying on a Ref cycle among live entities (self-references included). Only Constraints of kind `distance` (Num `value`) or `coincident` whose `a`/`b` reference live Points with Num `x`/`y` are solved; groups are connected components over shared Points; malformed or dangling constraints are skipped, not errors; satisfiable groups' solved `x`/`y` are written into `Evaluated.document`; Points in unsatisfiable groups and unconstrained Points keep their merged coordinates.
+
+- [ ] T1.8: kind registry: core kinds, extension kinds from trade packages, op validation
+  - Files: Cargo.toml, Cargo.lock, crates/bim-schema/, crates/bim-cli/
+  - Opens: T1.6
+  - Builder: sonnet
+  - Verification: bash judges/T1.8.sh
+  - Spec: Crate `bim-schema` knows the core kinds of spec/schema.md (including `Roof`, `Furniture`, `Product` and the direct-modelling kinds of spec/sketch.md) and loads the extension kinds declared by `<dir>/plugins/*/trade.json` (spec/schema.md, Extension kinds; package rules in spec/plugins.md, Trade packages). `bim apply` (JSON ops and the line format) exits 2 and changes nothing on a create of an undeclared kind, or a create or set that breaks an extension kind's prop declarations; a malformed or inconsistent package makes every command on the project exit 2 naming the file. `bim plugin list <dir> --json` per spec/cli.md, without `trades` (added by T4.8).
+  - Details: `bim-schema` exports at its root `KindRegistry` with `core() -> KindRegistry`, `load(dir: &std::path::Path) -> Result<KindRegistry, SchemaError>` (core kinds plus packages), `kind(&self, name: &str) -> Option<&KindDef>`, `kinds(&self) -> Vec<String>` (sorted), `check_create(&self, kind: &str, props: &[(String, bim_doc::Value)]) -> Result<(), SchemaError>` and `check_set(&self, kind: &str, key: &str, value: &bim_doc::Value) -> Result<(), SchemaError>`; `pub struct KindDef { pub name: String, pub package: Option<String>, pub props: std::collections::BTreeMap<String, PropType>, pub geometry: Option<Geometry> }` (core kinds: `package` None, `props` empty, `geometry` None); `pub enum PropType { Num, Text, Bool, Ref, List }`; `pub enum Geometry { Box { centre: [Term; 3], size: [Term; 3] }, Segment { from: [Term; 3], to: [Term; 3], diameter: Term } }`; `pub enum Term { Prop(String), Num(f64) }`; `SchemaError` implements `Display` and `std::error::Error`. `bim_doc::Value` is the kernel's value type (spec/schema.md Values). Core kinds' props are not type-checked. Reserved `_` keys keep their existing rule. `KindRegistry::core().kinds()` and `plugin list`'s `core_kinds` list every row of the spec/schema.md kinds table, `ConflictDiagnostic` included.
 
 ## M2 Geometry kernel
 
@@ -176,6 +187,28 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim export --format dxf|pdf --view …`. DXF: AutoCAD 2013 ASCII (AC1027) with layers named as in spec/cli.md, lineweights, `DASHED` ISO linetype on HIDDEN, HATCH entities, DIMENSION or MTEXT for dimensions, XDATA app `OPENBIM` holding the entity id; ezdxf `audit()` reports zero errors. PDF 1.7 with vector paths, one optional-content group per layer, correct line widths in points; pypdf reads it and finds the OCG names and dimension texts. Geometry equals the SVG export of T2.8 (judge compares coordinates).
   - Details: DXF strokes are LINE, LWPOLYLINE or POLYLINE with BYLAYER (or equal) lineweight; HIDDEN uses BYLAYER or DASHED linetype; every entity not on ANNOTATION carries XDATA `OPENBIM` whose first 1000-code string is the entity id; HATCH entities carry the cut entity's id and fill exactly its cut region; dimension text is explicit (DIMENSION text override, or MTEXT/TEXT on DIMENSION). PDF: one page, every stroke inside `/OC /<name> BDC … EMC` referencing an OCG in the page's `/Resources/Properties`; OCG names are exactly the layer names.
 
+- [ ] T2.10: direct modelling I: shapes, drawing, face finding, push/pull, erase, `bim sketch`
+  - Files: Cargo.toml, Cargo.lock, crates/bim-sketch/, crates/bim-model/, crates/bim-cli/
+  - Opens: T2.7, T1.8
+  - Builder: fable
+  - Verification: bash judges/T2.10.sh
+  - Spec: spec/sketch.md for the `Shape` kind and its rules (planar faces, solid vs surface, stable face ids) and the commands `line`, `rect`, `circle`, `arc`, `pushpull` (including `new` and punch-through) and `erase`, applied atomically by `bim sketch <dir> <file.json>`. Shapes compile into the geometry model: glTF export has one node per Shape (its triangulated faces, `extras.id` = the Shape id), and a closed Shape's solid volume is exact.
+  - Details: `bim-sketch` exports `run(doc: &bim_doc::Document, json: &str) -> Result<Vec<bim_doc::Op>, SketchError>` returning the ops that apply the whole command file (the CLI applies them atomically; nothing on error). After `rect` 4 × 3 and `pushpull` 2.5 the Shape is a closed solid of 30 m³ with 6 faces. Face finding works in any plane, not only z = 0. Within 1e-9 m points are equal.
+
+- [ ] T2.11: direct modelling II: offset, follow-me, move/rotate/scale with copies, paint, components
+  - Files: Cargo.lock, crates/bim-sketch/, crates/bim-model/
+  - Opens: T2.10
+  - Verification: bash judges/T2.11.sh
+  - Spec: spec/sketch.md commands `offset`, `followme`, `move`, `rotate`, `scale` (stretching, triangle fan for non-planar faces, `copy` and `array`), `paint` and `make_component`, plus `ComponentDefinition`/`ComponentInstance` placement: each instance is its definition's Shape under the instance transform in glTF export and solids; the definition's Shape is not placed itself; editing it changes every instance.
+  - Details: Same entry point `bim_sketch::run`. Volumes, areas and face counts after each command follow closed forms (e.g. follow-me of a square along an L path; offset of a rectangle by d leaves an inner (w − 2d)(h − 2d) face).
+
+- [ ] T2.12: direct modelling III: inference engine and typed measurements
+  - Files: Cargo.lock, crates/bim-sketch/
+  - Opens: T2.10, T2.3
+  - Verification: bash judges/T2.12.sh
+  - Spec: spec/sketch.md Inference and Measurements: candidate kinds, the 10 CSS px radius, priority order and tie-breaks; the measurement grammar with units, feet and inches, two-value input, arrays and division, and angles.
+  - Details: `bim_sketch::InferScene::new(scene: &str) -> Result<InferScene, SketchError>` parses the scene and builds its spatial index; `InferScene::infer_json(&self, query: &str) -> Result<String, SketchError>` answers a query; `bim_sketch::infer_json(scene: &str, query: &str) -> Result<String, SketchError>` equals `InferScene::new(scene)?.infer_json(query)`. Scene JSON `{"edges":[{"entity","index","a":[x,y,z],"b":[x,y,z]}],"faces":[{"entity","id","loops":[[[x,y,z],…],…]}],"guides":[{"entity","point","direction"?}],"level_elevation"}`; query `{"camera":{"eye","target","fov","width","height"},"cursor":[x,y],"from"?,"reference_edge"?:[[x,y,z],[x,y,z]]}`; result `{"point":[x,y,z]|null,"kind","ref":{"entity","index"|"id"}|null}`. `bim_sketch::parse_measurement(text: &str, default_unit: &str, angle: bool) -> Result<Measurement, SketchError>` with `pub enum Measurement { Length(f64), Lengths(f64, f64), Angle(f64), Array(u32), Divide(u32) }` (metres, radians). `InferScene::infer_json` answers a query on a 100,000-edge scene in under 2 ms (mean after construction, release build) using a spatial index.
+
 ## M3 Incremental engine, storage, sync
 
 - [ ] T3.1: demand-driven incremental computation (salsa-style)
@@ -218,7 +251,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T4.2.sh
   - Spec: Crate `bim-arch` (TradeEngine "arch"): planar arrangement of wall centrelines per level (splitting at intersections, T-junctions, dangling walls ignored), bounded faces → rooms with the area/volume rule of spec/schema.md, each room labelled by the `Space` whose `x y` lies inside it; per-layer material takeoff. Output per spec/cli.md `solve --trade arch`. Judge computes rooms independently with shapely (polygonize + per-wall inner-face offsets) on rectangular, L-shaped and non-orthogonal plans.
-  - Details: Room rules (inner faces, next level, slab above, numbering, `space`) are in spec/schema.md and spec/cli.md. `rooms[].boundary` is the room's inner-face polygon (the polygon whose area is `area`), one `[x, y]` per vertex, closing vertex optional.
+  - Details: Room rules (inner faces, next level, slab above, numbering, `space`) are in spec/schema.md and spec/cli.md. `rooms[].boundary` is the room's inner-face polygon (the polygon whose area is `area`), one `[x, y]` per vertex, closing vertex optional. The crate at `crates/engines/arch/` is `bim-arch`; it exports `pub struct ArchEngine` with `pub fn new() -> Self`, implementing `bim_plugin::TradeEngine` with `name()` = `arch`.
 
 - [ ] T4.3: curtain walls, stairs and ramps
   - Files: Cargo.lock, crates/engines/arch/, crates/bim-model/
@@ -243,7 +276,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T4.5.sh
   - Spec: TradeEngine "struct": extract an analytical stick model from Column/Beam entities (member axes through section centroids, nodes merged within 1e-6, beams split where other members frame in, `Support`s and column bases at the lowest level fixed unless a Support says otherwise); AreaLoads distributed to supporting beams by tributary area (each slab point goes to its nearest supporting beam); PointLoads applied at nearest node; combinations from LoadCombination entities; utilization = |N|/(A·fy) + |My|/(Wy·fy) + |Mz|/(Wz·fy). Output per spec/cli.md. Judge: tributary areas for rectangular bays by closed form, reactions equal total load, envelopes vs PyNite.
-  - Details: Analytical members: reference vector +z for Beams, +y for Columns; section_b along local y, section_h along local z: A = b·h, Iy = b·h³/12, Iz = h·b³/12, Wy = b·h²/6, Wz = h·b²/6, J = a·c³·(1/3 − 0.21·(c/a)·(1 − c⁴/(12·a⁴))) with a ≥ c; Euler–Bernoulli, no self-weight. A Beam's axis is at level elevation − z_offset − section_h/2; a Column's runs base to top through (x, y); axes are split wherever another member's end lies on them (1e-6). Tributary loads reach each beam as a distributed load following the width of its nearest-beam region. Tributary areas are measured on the slab's net plan region (SlabOpenings excluded); `tributary[].area` for a split member covers only that member's span. Output conventions: spec/cli.md.
+  - Details: Analytical members: reference vector +z for Beams, +y for Columns; section_b along local y, section_h along local z: A = b·h, Iy = b·h³/12, Iz = h·b³/12, Wy = b·h²/6, Wz = h·b²/6, J = a·c³·(1/3 − 0.21·(c/a)·(1 − c⁴/(12·a⁴))) with a ≥ c; Euler–Bernoulli, no self-weight. A Beam's axis is at level elevation − z_offset − section_h/2; a Column's runs base to top through (x, y); axes are split wherever another member's end lies on them (1e-6). Tributary loads reach each beam as a distributed load following the width of its nearest-beam region. Tributary areas are measured on the slab's net plan region (SlabOpenings excluded); `tributary[].area` for a split member covers only that member's span. Output conventions: spec/cli.md. `bim_struct` exports `pub struct StructEngine` with `pub fn new() -> Self`, implementing `bim_plugin::TradeEngine` with `name()` = `struct`.
 
 - [ ] T4.6: MEP hydraulics: port networks, continuity, Darcy-Weisbach, network solve
   - Files: Cargo.toml, Cargo.lock, crates/engines/mep/, crates/bim-cli/
@@ -251,7 +284,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T4.6.sh
   - Spec: Crate `bim-mep` (TradeEngine "mep"): directed graph of Ports and Segments per MepSystem; sinks' `flow` demands, sources with fixed `pressure`; loop networks solved by Newton (global gradient / Todini) with Hardy-Cross as a reference mode; head loss Darcy-Weisbach with friction factor from Colebrook-White solved to 1e-12 (laminar 64/Re below Re 2000), plus minor losses `minor_k·ρv²/2`; length from port coordinates; continuity residual reported. Output per spec/cli.md. Judge: single pipes vs closed form (0.1%), a textbook Hardy-Cross loop with constant f (0.1%), and random networks vs EPANET (WNTR, D-W headloss; 1% because EPANET approximates Colebrook).
-  - Details: Output conventions are in spec/cli.md; `--method hardy-cross` selects the reference solver and agrees with the default Newton solver to 0.1%. Elevation head (ρ·g·Δz) is not part of the contract. Above Re 2000 the friction factor is Colebrook-White (no transition interpolation).
+  - Details: Output conventions are in spec/cli.md; `--method hardy-cross` selects the reference solver and agrees with the default Newton solver to 0.1%. Elevation head (ρ·g·Δz) is not part of the contract. Above Re 2000 the friction factor is Colebrook-White (no transition interpolation). The crate at `crates/engines/mep/` is `bim-mep`; it exports `pub struct MepEngine` with `pub fn new() -> Self`, implementing `bim_plugin::TradeEngine` with `name()` = `mep`.
 
 - [ ] T4.7: duct/pipe sizing, electrical circuits, hard/soft clash detection
   - Files: Cargo.lock, crates/engines/mep/, crates/bim-model/, crates/bim-cli/
@@ -261,6 +294,21 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T4.7.sh
   - Spec: Sizing: smallest nominal size (round: DN 15,20,25,32,40,50,65,80,100,125,150,200,250,300 mm; rect ducts in 50 mm steps) keeping velocity ≤ 2.0 m/s (water) or ≤ 6.0 m/s (air) and pressure gradient ≤ 400 Pa/m (water) or 1.5 Pa/m (air); rect hydraulic diameter 2wh/(w+h). Circuits: current = Σwatts/voltage, voltage drop = I·2·ρ·L/A. Segments get solids (round as 16-gon prisms). `bim clash` per spec/cli.md using the BVH: hard = positive-volume intersection, soft = clearance violation. Judge: closed forms for sizing/circuits; clash volumes vs manifold3d intersections, soft distances vs trimesh proximity.
   - Details: Nominal DN is the inside diameter in mm. A rect duct keeps its authored height; its width is the smallest multiple of 50 mm meeting the limits; velocity = |flow|/(w·h); the gradient is the Darcy-Weisbach friction loss per metre with Colebrook f at the hydraulic diameter for the solved flow. Ports referenced only by Circuits are not part of a hydraulic network; a MepSystem without Segments solves trivially. Segment solids (spec/schema.md) appear in the glTF export with `extras.id`.
+
+- [ ] T4.8: trade packages: WebAssembly trade engines, extension geometry, generic trade metrics
+  - Files: Cargo.lock, crates/bim-plugin/, crates/bim-model/, crates/bim-cli/, crates/engines/arch/, crates/engines/structural/, crates/engines/mep/
+  - Opens: T1.8, T4.1, T4.2, T4.5, T4.7
+  - Needs: .oracles/rust-wasip2
+  - Verification: bash judges/T4.8.sh
+  - Spec: Trade packages per spec/plugins.md: a package's `engine` component (`openbim:trade@0.1.0`, world `trade-engine`) registers as a trade engine and as a rule set under the package name; `bim solve --trade <package>` and `bim validate --standard <package>` run it under the rule-set sandbox; `TradeEngine::metrics` and `Registry::engine_names` exist and the built-in engines report the metrics of spec/plugins.md; `bim plugin list` gains `trades`. Extension kinds with `box` or `segment` geometry compile to solids (spec/schema.md), so they appear in glTF export and in `bim clash`. The judge builds its own sample trade package from source.
+  - Details: The host passes `rooms` exactly as `bim solve --trade arch` reports them and `solids` for every entity with a derived solid (core and extension), each list sorted by id; `min`/`max` are [x, y, z]. Clash `matrix` keys for extension kinds use the full kind name (e.g. `fire:Sprinkler`). Sandbox and exit codes as for `rule-set` components.
+
+- [ ] T4.9: product catalogues: Product, Furniture and Roof, effective props, finish take-off
+  - Files: Cargo.toml, Cargo.lock, crates/bim-catalog/, crates/bim-model/, crates/engines/arch/, crates/bim-cli/
+  - Opens: T1.8, T4.3, T4.7
+  - Verification: bash judges/T4.9.sh
+  - Spec: spec/catalogs.md: `bim catalog list` and `bim catalog use` with the catalogue validation rules; `Product` entities as specified; effective props for `Opening.product` and `Furniture.product` in geometry and engines; Roof and Furniture solids per spec/schema.md in glTF export and `bim clash`; `bim solve --trade arch` adds `products` and `roofs` (Take-off).
+  - Details: `bim catalog use` is atomic and idempotent (twice with an unchanged catalogue leaves `bim hash` unchanged); after the catalogue file changes, rerunning it updates the Product (props removed from the catalogue are removed) and every element's effective props. An Opening's effective `width`/`height` drive the host wall's cut and the arch outputs.
 
 ## M5 Standards packs and interoperability
 
@@ -282,11 +330,11 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 - [ ] T5.3: IFC4 import into the document graph
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
-  - Opens: T5.2
+  - Opens: T5.2, T2.10
   - Needs: .oracles/py/bin/python
   - Verification: bash judges/T5.3.sh
-  - Spec: `bim import <dir> f.ifc`: storeys → Levels, walls/slabs/columns/beams/openings/spaces → schema entities (parametric where the IFC is a standard extrusion; otherwise kept as faceted geometry on an imported-geometry entity), placements resolved, property sets kept as props. Judge generates IFC files at run time with ifcopenshell.api (independent producer) and checks element counts and volumes within 1e-4; import → export → ifcopenshell volumes conserve within 1e-4.
-  - Details: Import reads IFC4 and IFC2X3. An imported entity's id is the 26-char ULID spelling of the 128 bits of its GlobalId (so re-export reproduces it). Property-set values become props `<PsetName>.<PropName>`: labels/text → Text, numeric measures and integers → Num, IfcBoolean → Bool. An Opening's `kind` comes from its filling (IfcDoor → door, IfcWindow → window).
+  - Spec: `bim import <dir> f.ifc`: storeys → Levels, walls/slabs/columns/beams/openings/spaces → schema entities (parametric where the IFC is a standard extrusion; otherwise imported as a `Shape`, spec/sketch.md), placements resolved, property sets kept as props. Judge generates IFC files at run time with ifcopenshell.api (independent producer) and checks element counts and volumes within 1e-4; import → export → ifcopenshell volumes conserve within 1e-4.
+  - Details: Import reads IFC4 and IFC2X3. An imported entity's id is the 26-char ULID spelling of the 128 bits of its GlobalId (so re-export reproduces it). Property-set values become props `<PsetName>.<PropName>`: labels/text → Text, numeric measures and integers → Num, IfcBoolean → Bool. An Opening's `kind` comes from its filling (IfcDoor → door, IfcWindow → window). A non-parametric element becomes a `Shape` whose `classification` is its IFC class, whose `level` is its storey and whose faces are its body's faces (a non-planar face is split into triangles fanned from its first vertex); export writes a placed closed Shape as an occurrence of its `classification` class with an IfcFacetedBrep of its faces (the rule T5.9 builds on).
 
 - [ ] T5.4: reference-corpus round-trip judge (Duplex, Schependomlaan, buildingSMART samples)
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-model/, crates/bim-cli/
@@ -322,6 +370,21 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-codes` (StandardRuleSet) loading packs per spec/plugins.md with the full check vocabulary and the three shipped packs. `bim validate --standard ibc|eurocode|accessibility|<path>`. Judge fixtures: corridors, doors, stairs, ramps and walls just inside and just outside each limit (closed-form measured values within 1e-9), a pack file edited between two runs changes the result with no rebuild, unknown check names exit 2.
   - Details: Pack semantics, exit codes and the shipped rules are in spec/plugins.md.
 
+- [ ] T5.8: IFC4 export of catalogue products, furniture, roofs, finishes and extension kinds
+  - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
+  - Opens: T5.3, T4.8, T4.9
+  - Verification: bash judges/T5.8.sh
+  - Spec: `bim export --format ifc` also writes: each Product as a type object by category (`door` IfcDoorType, `window` IfcWindowType, `furniture` IfcFurnitureType; `wall_finish`, `floor_finish`, `ceiling_finish`, `roof_covering` IfcCoveringType with PredefinedType CLADDING, FLOORING, CEILING, ROOFING; other categories IfcBuildingElementProxyType) linked to its occurrences by IfcRelDefinesByType, with Pset_ManufacturerTypeInformation (Manufacturer, ModelReference = sku, ModelLabel = name) and a property set `openbim_Catalogue` holding the product's own props; Furniture as IfcFurniture and Roof as IfcRoof with their solids; each finish reference as an IfcCovering related to its element by IfcRelCoversBldgElements; each extension entity as IfcBuildingElementProxy with ObjectType = its kind and a property set `<package>_<Kind>` holding its Num/Text/Bool props. All readable by ifcopenshell; T5.2 behaviour unchanged.
+  - Details: Custom property sets never use the reserved `Pset_` prefix. Occurrence `Name` = the entity's `_name`; type `Name` = the Product's `name` and `Tag` = the Product id. Elements with a `level` Ref are contained in that storey. List-valued props export as IfcPropertyListValue.
+
+- [ ] T5.9: IFC4 export of direct-modelling shapes and components
+  - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
+  - Opens: T5.8, T2.11
+  - Builder: sonnet
+  - Verification: bash judges/T5.9.sh
+  - Spec: Each placed closed Shape exports as an occurrence of its `classification` class (default IfcBuildingElementProxy) with an IfcFacetedBrep of its faces (as T5.3 already does); a ComponentInstance exports as an occurrence of its definition Shape's `classification` class (its type object is that class's type); each ComponentDefinition as a type object (the occurrence class's type, IfcBuildingElementProxyType by default) with an IfcRepresentationMap, and each ComponentInstance as an occurrence using an IfcMappedItem with the instance transform, linked by IfcRelDefinesByType. Open surfaces export as IfcBuildingElementProxy with an IfcShellBasedSurfaceModel. Painted faces carry IfcStyledItem colours from the product's `colour` prop when present.
+  - Details: Volumes computed by ifcopenshell match the shape volumes within 1e-6 relative; instance placements match their transforms within 1e-9, and a placed Shape's IfcFacetedBrep vertices equal the Shape's vertices under its `transform` within 1e-9. GlobalIds follow T5.2; a ComponentDefinition's type object carries the definition's GlobalId. The IfcFacetedBrep has one IfcFace per Shape face. IfcRepresentationMap.MappingOrigin is the identity placement. A painted face's colour is an IfcColourRgb whose Red, Green and Blue are the sRGB channels of the product's `colour` divided by 255, in an IfcSurfaceStyle attached by an IfcStyledItem to that IfcFace.
+
 ## M6 Agent interface
 
 - [ ] T6.1: Datalog query engine over the semantic graph
@@ -342,12 +405,12 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 - [ ] T6.3: transactional mutations: propose_transaction / commit_transaction
   - Files: Cargo.lock, crates/bim-mcp/
-  - Opens: T6.2
+  - Opens: T6.2, T4.8
   - Needs: .oracles/node/node_modules/@modelcontextprotocol/sdk
   - Builder: sonnet
   - Verification: bash judges/T6.3.sh
-  - Spec: Dry-run validation per spec/mcp.md: proposing never changes `bim hash`; the report's clash, violation, utilization and dp numbers equal those of running the CLI on a copy with the ops applied; commit applies exactly the proposed ops; a commit after an intervening change is rejected as stale; invalid ops give `valid: false` with reasons.
-  - Details: An invalid proposal returns `{"valid": false, "reasons": [string, …]}` (non-empty) and its tx cannot be committed; missing or non-list `ops`, or a missing `tx`, is a tool error. `clashes.*` = number of `hard` entries of `bim clash --json`; `violations.*` = total violations of `bim validate --standard ibc|eurocode|accessibility --json` summed over the three packs; `violations.new` = violation objects present after but not before, matched by (rule, entity); `structural.max_utilization_*` = max `members[].utilization`; `mep.max_dp_*` = max |`segments[].dp`|; `conflicts` = the `conflicts` of `bim validate --json` with the ops applied.
+  - Spec: Dry-run validation per spec/mcp.md: proposing never changes `bim hash`; the report's clash, violation and per-trade metric numbers equal those of running the CLI on a copy with the ops applied; commit applies exactly the proposed ops; a commit after an intervening change is rejected as stale; invalid ops give `valid: false` with reasons.
+  - Details: An invalid proposal returns `{"valid": false, "reasons": [string, …]}` (non-empty) and its tx cannot be committed; missing or non-list `ops`, or a missing `tx`, is a tool error. `clashes.*` = number of `hard` entries of `bim clash --json`; `violations.*` = total violations of `bim validate --standard ibc|eurocode|accessibility --json` summed over the three packs; `violations.new` = violation objects present after but not before, matched by (rule, entity); `trades.<trade>.<metric>.before/after` = that engine's metrics (spec/plugins.md) on the document before and after, for every `Registry::engine_names()` entry (so `trades.struct.max_utilization`, `trades.mep.max_dp`, `trades.arch.total_area`); `conflicts` = the `conflicts` of `bim validate --json` with the ops applied.
 
 ## M7 Rendering and WebAssembly
 
@@ -424,3 +487,21 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T8.4.sh
   - Spec: `?sync=` collaboration through `bim sync serve` with presence avatars; Issues panel (BCF topics linked to selected entities); Validate panel listing code violations; section-box tool; responsive at 390 px and 1440 px with no horizontal overflow; zero serious/critical axe-core violations; in-browser frame-time harness on a 10,000-element model reports p95 < 16.6 ms in the status bar. Judge: two browser contexts converge after concurrent edits, axe and overflow checks, frame-time read from the status bar.
   - Details: Adds `validate(standard)` and `issues()` to the bim-wasm `Model` (spec/web.md) for the Validate and Issues panels. Studio behaviour conventions are in spec/web.md.
+
+- [ ] T8.5: Studio product catalogues: import, browse, place furniture, assign products and finishes
+  - Files: package-lock.json, apps/studio/
+  - Opens: T8.4, T4.9
+  - Verification: bash judges/T8.5.sh
+  - Spec: The Studio imports a `catalog.json` (spec/catalogs.md) through `catalog-import`, lists products by category in `catalog-products` (one `product-<catalog>:<sku>` item each, showing name and manufacturer), places the selected furniture product with `tool-furniture` by clicking in the plan, and `assign-product` applies the selected product to the selected element by category: door or window to an Opening's `product`; wall finish to both faces of a Wall; floor finish to a Slab's `finish_top`; ceiling finish to `finish_bottom`; roof covering to a Roof's `covering`. Placing or assigning creates the Product entity exactly as `bim catalog use` would. `props-panel` shows effective props. Zero serious/critical axe-core violations with the catalogue panel open.
+
+- [ ] T8.6: Studio direct modelling I: drawing tools, push/pull, inference feedback, measurements box
+  - Files: Cargo.lock, package-lock.json, apps/studio/, packages/web-viewport/, crates/bim-wasm/, packages/bim-wasm/
+  - Opens: T8.4, T2.12
+  - Verification: bash judges/T8.6.sh
+  - Spec: wasm `Model.sketch` and `Model.infer` per spec/web.md. In `viewport-3d`, `tool-line`, `tool-rect`, `tool-circle`, `tool-arc` and `tool-pushpull` draw with live inference: the snap point follows `bim_sketch::infer`, `inference-tip` names the kind (Endpoint, Midpoint, Intersection, On Edge, Guide, On Red/Green/Blue Axis, Parallel, Perpendicular, On Face) and axis guides draw red, green and blue. Typing while a tool runs fills `measurements`; Enter applies it (e.g. `4000,3000` sizes a rectangle, `2500` a push/pull). Double-click with push/pull repeats the last distance; Ctrl/Cmd makes a new face; Esc cancels. Keys: L line, R rectangle, C circle, A arc, P push/pull, Space select (S stays select, as in T8.3). Orbit with the middle button, pan with Shift + middle, zoom with the wheel, `zoom-extents` (Shift+Z) frames the model. `Model.infer` answers under 8 ms p95 per query in Chrome (after one warm-up query) on a 100,000-Shape model (1,200,000 edges).
+
+- [ ] T8.7: Studio direct modelling II: move, rotate, scale, offset, follow-me, tape, eraser, paint, components, scenes
+  - Files: package-lock.json, apps/studio/, packages/web-viewport/
+  - Opens: T8.6, T2.11, T8.5
+  - Verification: bash judges/T8.7.sh
+  - Spec: `tool-move` (M, with Ctrl/Cmd to copy and `x5`, `5x` or `/5` typed after a copy for arrays), `tool-rotate` (Q, typed degrees), `tool-scale` (Shift+S), `tool-offset` (F), `tool-followme`, `tool-tape` (T, creates Guides), `tool-eraser` (E), `tool-paint` (B, applies the selected catalogue product to faces), `make-component` (turns the selection into a component; editing one instance changes all), and `scenes` (save and restore camera views as Scene entities). Every tool uses the inference and `measurements` behaviour of T8.6, and every result equals the corresponding `bim sketch` command. Zero serious/critical axe-core violations; no horizontal overflow at 390 px or 1440 px.

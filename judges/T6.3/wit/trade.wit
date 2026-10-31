@@ -1,0 +1,17 @@
+// Copied verbatim from spec/plugins.md ("Trade packages").
+package openbim:trade@0.1.0;
+
+interface types {
+  record entity { id: string, kind: string, props-json: string }
+  record room { id: string, level: string, area: f64, boundary: list<f64> }
+  record solid { id: string, volume: f64, min: list<f64>, max: list<f64> }
+  record metric { key: string, value: f64 }
+  record violation { rule: string, entity: string, message: string, measured: f64, limit: f64 }
+  record output { json: string, metrics: list<metric>, violations: list<violation> }
+}
+
+world trade-engine {
+  use types.{entity, room, solid, output};
+  export name: func() -> string;
+  export solve: func(entities: list<entity>, rooms: list<room>, solids: list<solid>) -> result<output, string>;
+}

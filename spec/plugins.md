@@ -16,6 +16,19 @@ pub trait StandardRuleSet: Send + Sync {
 pub struct Violation { pub rule: String, pub entity: String, pub message: String, pub measured: f64, pub limit: f64 }
 ```
 
+Added by T4.8, so generic surfaces (MCP, Studio) can report any trade without knowing its name:
+
+```rust
+pub struct Metric { pub key: String, pub value: f64 }
+// on TradeEngine, with a default that returns no metrics:
+fn metrics(&self, result: &serde_json::Value) -> Vec<Metric> { Vec::new() }
+// on Registry: every registered engine name, sorted
+fn engine_names(&self) -> Vec<String>;
+```
+
+Built-in metrics: `arch` → `total_area` = Σ `rooms[].area`; `struct` → `max_utilization` = max `members[].utilization`;
+`mep` → `max_dp` = max |`segments[].dp`|; each is 0 when its list is empty.
+
 `EngineContext` gives read-only access to the document and to memoized derived data (solids,
 rooms, analytical model). Engines are pure projections: they never mutate the document.
 A `Registry` maps names to engines and rule sets; the CLI and MCP server resolve through it only.
@@ -47,6 +60,45 @@ with no preopened directories, no inherited environment and no network, caps lin
 so a non-terminating `check` stops within 10 s; a trap, fuel exhaustion or memory failure exits 3 with a message,
 never a host crash. An unknown `--trade`, a `--standard` that is neither a pack id nor an existing file, and a file
 that is not a valid `rule-set` component exit 2.
+
+## Trade packages
+
+A trade package adds a trade without rebuilding openbim. It is a directory `<dir>/plugins/<package>/` holding
+`trade.json` (spec/schema.md, Extension kinds) and, optionally, the WebAssembly component named by `engine`.
+Every command that reads `<dir>` loads every package; the directory name must equal `package`, `package` must not be
+a built-in trade (`arch`, `struct`, `mep`) or a shipped pack id (`ibc`, `eurocode`, `accessibility`), every kind must use the package's namespace, and `abi` must be
+`openbim:trade@0.1.0`. A package that breaks any of these, or malformed `trade.json`, makes the command exit 2 naming
+the file. A missing or invalid `engine` file exits 2 only when that engine is invoked.
+
+Only packages that declare `engine` appear in `Registry::engine_names()` and `trades`. A package with an `engine` registers a trade engine under its package name and also acts as a rule set under the same
+name. The component implements this world and runs under the same host rules as `rule-set` components (no filesystem,
+network or environment, 512 MiB memory, fuel stops a non-terminating call within 10 s, trap → exit 3):
+
+```wit
+package openbim:trade@0.1.0;
+
+interface types {
+  record entity { id: string, kind: string, props-json: string }
+  record room { id: string, level: string, area: f64, boundary: list<f64> }
+  record solid { id: string, volume: f64, min: list<f64>, max: list<f64> }
+  record metric { key: string, value: f64 }
+  record violation { rule: string, entity: string, message: string, measured: f64, limit: f64 }
+  record output { json: string, metrics: list<metric>, violations: list<violation> }
+}
+
+world trade-engine {
+  use types.{entity, room, solid, output};
+  export name: func() -> string;
+  export solve: func(entities: list<entity>, rooms: list<room>, solids: list<solid>) -> result<output, string>;
+}
+```
+
+The host calls `solve` once per command with one `entity` per live entity (as for `rule-set`), the rooms of
+`bim solve --trade arch` (`boundary` flattened x0, y0, x1, y1, …) and one `solid` per entity that has a derived solid
+(`min`/`max` its axis-aligned bounds as [x, y, z]), each list sorted by its `id` string (byte-wise). `name()` must return the package name
+(else exit 2; it is checked only when the engine is invoked, so a mismatch does not affect other commands). `bim solve <dir> --trade <package> --json` prints `output.json` (exit 3 if it is not valid JSON);
+`bim validate <dir> --standard <package> --json` reports `output.violations` unchanged; `metrics` feed the
+`metrics` method above. `err(message)` exits 1 with the message on stderr.
 
 ## Declarative packs (`crates/standards/codes/packs/*.json`, or any path)
 

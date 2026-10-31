@@ -38,12 +38,21 @@ function metrics(d) {
   const clash = cliJson(["clash", d, "--json"], [0, 1]);
   const struct = cliJson(["solve", d, "--trade", "struct", "--json"]);
   const mep = cliJson(["solve", d, "--trade", "mep", "--json"]);
+  const arch = cliJson(["solve", d, "--trade", "arch", "--json"]);
   const violations = PACKS.flatMap((p) => cliJson(["validate", d, "--standard", p, "--json"], [0, 1]).violations);
   const conflicts = cliJson(["validate", d, "--json"], [0, 1]).conflicts;
+  // The judge's fire engine (judges/T6.3/plugins/fire) writes the metrics it returns in output.metrics
+  // into its output.json as well, so this is what the engine computed on `d`.
+  const fire = cliJson(["solve", d, "--trade", "fire", "--json"]).metrics;
+  if (!fire || typeof fire.sprinklers !== "number" || typeof fire.coverage_total !== "number")
+    fail(`bim solve --trade fire did not print the judge engine's output.json: ${JSON.stringify(fire)}`);
   return {
+    fire,
     clashes: clash.hard.length,
-    maxUtil: Math.max(...struct.members.map((m) => m.utilization)),
-    maxDp: Math.max(...mep.segments.map((s) => Math.abs(s.dp))),
+    // spec/plugins.md built-in metrics; each is 0 when its list is empty
+    maxUtil: Math.max(0, ...struct.members.map((m) => m.utilization)),
+    maxDp: Math.max(0, ...mep.segments.map((s) => Math.abs(s.dp))),
+    totalArea: arch.rooms.reduce((a, r) => a + r.area, 0),
     violations, conflicts,
   };
 }
@@ -124,10 +133,24 @@ function checkReport(rep, ops, before, label) {
   const after = metrics(applied(ops));
   close(rep.clashes?.before, before.clashes, `${label} clashes.before`);
   close(rep.clashes?.after, after.clashes, `${label} clashes.after`);
-  close(rep.structural?.max_utilization_before, before.maxUtil, `${label} structural.max_utilization_before`);
-  close(rep.structural?.max_utilization_after, after.maxUtil, `${label} structural.max_utilization_after`);
-  close(rep.mep?.max_dp_before, before.maxDp, `${label} mep.max_dp_before`);
-  close(rep.mep?.max_dp_after, after.maxDp, `${label} mep.max_dp_after`);
+  // spec/mcp.md: one `trades` entry per registered engine: the built-ins plus the project's fire package
+  const tradeNames = Object.keys(rep.trades ?? {}).sort();
+  if (JSON.stringify(tradeNames) !== JSON.stringify(["arch", "fire", "mep", "struct"]))
+    fail(`${label}: trades keys should be [arch, fire, mep, struct], got ${JSON.stringify(tradeNames)}`);
+  // A WebAssembly engine's output.metrics reach `trades.<package>` through TradeEngine::metrics.
+  const fireKeys = Object.keys(rep.trades.fire ?? {}).sort();
+  if (JSON.stringify(fireKeys) !== JSON.stringify(["coverage_total", "sprinklers"]))
+    fail(`${label}: trades.fire should have the engine's metrics [coverage_total, sprinklers], got ${JSON.stringify(fireKeys)}`);
+  for (const k of fireKeys) {
+    close(rep.trades.fire[k]?.before, before.fire[k], `${label} trades.fire.${k}.before`);
+    close(rep.trades.fire[k]?.after, after.fire[k], `${label} trades.fire.${k}.after`);
+  }
+  close(rep.trades.struct.max_utilization?.before, before.maxUtil, `${label} trades.struct.max_utilization.before`);
+  close(rep.trades.struct.max_utilization?.after, after.maxUtil, `${label} trades.struct.max_utilization.after`);
+  close(rep.trades.mep.max_dp?.before, before.maxDp, `${label} trades.mep.max_dp.before`);
+  close(rep.trades.mep.max_dp?.after, after.maxDp, `${label} trades.mep.max_dp.after`);
+  close(rep.trades.arch.total_area?.before, before.totalArea, `${label} trades.arch.total_area.before`);
+  close(rep.trades.arch.total_area?.after, after.totalArea, `${label} trades.arch.total_area.after`);
   close(rep.violations?.before, before.violations.length, `${label} violations.before`);
   close(rep.violations?.after, after.violations.length, `${label} violations.after`);
   const old = new Set(before.violations.map(vkey));
@@ -152,6 +175,8 @@ try {
     { op: "set", id: "D1", key: "width", value: 0.8 },              // ibc 0.813 and accessibility 0.85 door limits
     { op: "create", id: "C5", kind: "Column", props: { x: 3, y: 2, base: { ref: "L1" }, top: { ref: "LT" },
       section_b: 0.3, section_h: 0.3, material: { ref: "M1" } } },  // stands in pipe G1's path → new hard clash
+    { op: "create", id: "SPR3", kind: "fire:Sprinkler", props: { level: { ref: "L1" }, x: 3, y: 3.5, z: 2,
+      coverage_radius: 3 } },                                       // fire engine: sprinklers 2 → 3
   ];
   const before = metrics(dir);
   const repA = await propose(txA);
@@ -159,6 +184,9 @@ try {
   if (afterA.clashes <= before.clashes) fail("fixture: column C5 should add a hard clash with pipe G1");
   if (!(afterA.maxUtil > before.maxUtil)) fail("fixture: a 10x area load and a narrower B1 should raise max utilization");
   if (!(afterA.maxDp > before.maxDp)) fail("fixture: shrinking G1 should raise max dp");
+  // independent of the engine: the fixture has sprinklers SPR1 (r 2) and SPR2 (r 2.5); txA adds SPR3 (r 3)
+  close([before.fire.sprinklers, before.fire.coverage_total, afterA.fire.sprinklers, afterA.fire.coverage_total],
+    [2, 4.5, 3, 7.5], "fire engine metrics before/after proposal A (sprinkler count and coverage from the fixture)");
   const d1New = repA.violations.new.filter((v) => v.entity === "D1");
   if (d1New.length < 2 || d1New.some((v) => Math.abs(v.measured - 0.8) > 1e-9))
     fail(`proposal A: expected >= 2 new door violations on D1 measured 0.8, got ${JSON.stringify(d1New)}`);
@@ -168,7 +196,8 @@ try {
   checkReport(await propose(txDel), txDel, before, "proposal delete D1");
 
   // ---- B: commit applies exactly the proposed ops; A becomes stale ----
-  const txB = [{ op: "set", id: "W2", key: "height", value: 2.7 }, { op: "create", id: "I2", kind: "Issue",
+  const txB = [{ op: "set", id: "W2", key: "height", value: 2.7 }, { op: "set", id: "SPR1", key: "coverage_radius", value: 1 },
+    { op: "create", id: "I2", kind: "Issue",
     props: { title: "height", status: "open", entities: [{ ref: "W2" }] } }];
   const repB = await propose(txB);
   checkReport(repB, txB, before, "proposal B");

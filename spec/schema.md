@@ -31,13 +31,16 @@ Props marked † are optional. A `Ref` prop is a parametric dependency edge (the
 |---|---|
 | `Level` | `elevation` |
 | `WallType` | `layer_thickness` List[Num], `layer_material` List[Text], `layer_conductivity` List[Num] (W/m·K) |
-| `Wall` | `level` Ref Level, `x1 y1 x2 y2` centreline, `height`, `type` Ref WallType, `base_offset`† (0) |
-| `Opening` | `host` Ref Wall, `kind` Text (`door`/`window`), `offset` (along centreline from (x1,y1) to the opening's near edge), `sill`, `width`, `height` |
-| `Slab` | `level` Ref Level, `boundary` List[Num] (x0,y0,x1,y1,… counter-clockwise), `thickness` (slab top at level elevation) |
+| `Wall` | `level` Ref Level, `x1 y1 x2 y2` centreline, `height`, `type` Ref WallType, `base_offset`† (0), `finish_left`† `finish_right`† Ref Product |
+| `Opening` | `host` Ref Wall, `kind` Text (`door`/`window`), `offset` (along centreline from (x1,y1) to the opening's near edge), `sill`, `width`, `height`, `product`† Ref Product |
+| `Slab` | `level` Ref Level, `boundary` List[Num] (x0,y0,x1,y1,… counter-clockwise), `thickness` (slab top at level elevation), `finish_top`† `finish_bottom`† Ref Product |
 | `SlabOpening` | `host` Ref Slab, `boundary` List[Num] |
 | `CurtainWall` | `level`, `x1 y1 x2 y2`, `height`, `u_spacing`, `v_spacing`, `mullion_width`, `mullion_depth`, `panel_thickness` |
 | `Stair` | `base` Ref Level, `top` Ref Level, `x y` start of the run, `angle` run direction, `width`, `riser_count`, `tread` |
 | `Ramp` | `base`, `top`, `x y`, `angle`, `width`, `length` |
+| `Roof` | `level` Ref Level, `boundary` List[Num] (counter-clockwise footprint), `slope` (rise per run, ≥ 0), `angle` (plan direction of rise), `thickness` (vertical), `base`† (0, height of the underside at the first boundary vertex above the level), `covering`† Ref Product |
+| `Furniture` | `level` Ref Level, `x y` centre, `angle` (plan rotation of the product's width axis from +x), `product` Ref Product, `z_offset`† (0), `size`† List[Num] |
+| `Product` | `catalog`, `catalog_version`, `sku`, `category`, `name`, `manufacturer` (Text) and the catalogue product's own props — spec/catalogs.md |
 | `Space` | `level` Ref Level, `x y` (a point inside the room it labels), `name` Text, `use` Text† (e.g. `corridor`, `office`) — authored label; geometry is derived |
 | `Point` | `x y`, `z`† (0) — a sketch point that `Constraint`s act on |
 | `Material` | `name`, `E` (Pa), `G` (Pa), `density`, `fy` (Pa) |
@@ -54,7 +57,37 @@ Props marked † are optional. A `Ref` prop is a parametric dependency edge (the
 | `Constraint` | `kind` Text (`coincident`/`parallel`/`perpendicular`/`distance`/`angle`/`datum`), `a` Ref, `b` Ref†, `value`† — between entity endpoints/datums |
 | `Dimension` | `a` Ref, `b` Ref, `view` Text — associative; its measured value is derived, never stored |
 | `Issue` | `title`, `status`, `entities` List[Ref] — mirrors a BCF topic |
+| `Shape`, `ComponentDefinition`, `ComponentInstance`, `Guide`, `Scene` | Direct modelling: spec/sketch.md |
 | `ConflictDiagnostic` | `entity` Ref, `key` Text, `target` Ref†, `reason` Text — **materialized by the kernel**, never authored |
+
+## Extension kinds (trade packages)
+
+Kinds outside the table above come from trade packages (spec/plugins.md), so new trades need no change to
+this schema. An extension kind is named `<package>:<Kind>` (package `[a-z][a-z0-9-]*`, Kind `[A-Z][A-Za-z0-9]*`)
+and is declared in the package's `trade.json`:
+
+```json
+{"package": "fire", "version": "0.1.0", "abi": "openbim:trade@0.1.0",
+ "kinds": {
+   "fire:Sprinkler": {"props": {"level": "ref", "x": "num", "y": "num", "z": "num", "coverage_radius": "num"},
+                      "geometry": {"box": {"centre": ["x", "y", "z"], "size": [0.1, 0.1, 0.1]}}},
+   "fire:Main": {"props": {"x1": "num", "y1": "num", "z1": "num", "x2": "num", "y2": "num", "z2": "num", "diameter": "num"},
+                 "geometry": {"segment": {"from": ["x1", "y1", "z1"], "to": ["x2", "y2", "z2"], "diameter": "diameter"}}}
+ },
+ "engine": "fire.wasm"}
+```
+
+- Prop types: `num`, `text`, `bool`, `ref`, `list` (the Values above). A `trade.json` with an unknown prop type, an
+  unknown geometry template, or a geometry entry that is neither a prop name nor a number is malformed. Every declared prop is optional; a present prop
+  must have its declared type, and an extension entity may carry only declared props (plus reserved `_` props).
+- `geometry` is optional (no solid when absent) and is one of a closed set of templates. Each coordinate or size entry
+  is a prop name or a number literal; a solid exists only when every named prop is present.
+- Extension entities behave like core entities everywhere that is generic: ids, hashing, CRDT merge, diff, dangling
+  refs, `bim show`, Datalog `entity/prop/ref`, clash detection and rendering (through their solid), and IFC export
+  (as `IfcBuildingElementProxy`, T5.8).
+- Op files, the CLI and MCP reject (exit 2 / tool error) a create whose kind is neither a core kind nor declared by a
+  loaded package, and any create or set that breaks an extension kind's prop declarations. Core kinds keep their
+  current behaviour (their props are not type-checked).
 
 ## Derived geometry rules (shared by all engines and judges)
 
@@ -77,3 +110,12 @@ Props marked † are optional. A `Ref` prop is a parametric dependency edge (the
   a beam's `section_b` is centred on its axis.
 - MEP segment solids run from the `from` port to the `to` port: round = 16-gon prism with every vertex at radius D/2;
   rect = `width` horizontal and perpendicular to the axis, `height` vertical.
+- Roof: underside z(x, y) = level elevation + `base` + `slope` · ((x, y) − (x0, y0)) · (cos `angle`, sin `angle`), where
+  (x0, y0) is the first boundary vertex; the solid spans the footprint from the underside up by `thickness` (vertical).
+  Volume = plan area × `thickness`; sloped (top) area = plan area × √(1 + `slope`²). Gable and hipped roofs are several Roofs.
+- Furniture: a cuboid of effective `size` [width, depth, height] centred on (x, y) in plan, width along `angle`, base at
+  level elevation + `z_offset`.
+- Effective props: an element with a `product` takes each prop it lacks from that Product (spec/catalogs.md).
+- Extension `box` template: an axis-aligned cuboid centred at `centre` (absolute x, y, z in metres) with edge lengths
+  `size` along x, y, z. Extension `segment` template: meshed exactly as a round MEP segment from `from` to `to` with
+  diameter `diameter`.

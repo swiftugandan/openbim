@@ -21,6 +21,8 @@ class Model {
   exportView(view: string, format: string): string;
   validate(standard: string): string;           // JSON as `bim validate --standard <s> --json` (added by T8.4)
   issues(): string;                             // JSON [{id, title, status, entities: [id strings]}] of Issue entities (added by T8.4)
+  sketch(json: string): void;                   // sketch commands as `bim sketch` (spec/sketch.md); throws on invalid, atomic (added by T8.6)
+  infer(json: string): string;                  // T2.12 query JSON in, result JSON out, against the model (added by T8.6)
 }
 export const memory: WebAssembly.Memory;
 ```
@@ -63,6 +65,47 @@ Stable test hooks (`data-testid`), required for end-to-end judges:
 `viewport-3d`, `sheet-2d`, `tool-select`, `tool-wall`, `tool-slab`, `tool-door`, `tool-section-box`,
 `props-panel`, `prop-<key>` (inputs), `history`, `undo`, `redo`, `presence`, `issues`, `validate`,
 `violations`, `level-picker`, `status-bar` (shows backend and fps).
+Added by T8.5 (catalogues): `catalog-import` (file input), `catalog-products`, `product-<catalog>:<sku>`, `tool-furniture`,
+`assign-product`. `catalog-products` holds one `product-<catalog>:<sku>` item for every product of every imported
+catalogue at once, grouped by category (within a catalogue, a category's items are consecutive). Clicking an item selects
+that product, which stays selected while elements are selected in the views; `assign-product` is a button that applies
+it to the selected element. `tool-furniture` creates a Furniture on the active level at the clicked plan point with
+`angle` 0. Props an element inherits from its product appear in `props-panel` as `prop-<key>` with the product's value;
+the element's own props show its own values. Changes arriving through sync do not reframe the plan. Added by T8.6 (direct modelling): `tool-line`, `tool-rect`, `tool-circle`, `tool-arc`, `tool-pushpull`,
+`tool-move`, `tool-rotate`, `tool-scale`, `tool-offset`, `tool-followme`, `tool-tape`, `tool-eraser`, `tool-paint`,
+`tool-orbit`, `tool-pan`, `zoom-extents`, `make-component`, `scenes`, `measurements` (the typed-value box),
+`inference-tip`.
+
+Direct modelling in the Studio (T8.6, T8.7):
+- `infer(json)` takes the T2.12 query JSON (`camera`, `cursor`, optional `from` and `reference_edge`, optional
+  `level_elevation`, default 0) and answers it against the model's world-space edges, faces and guides, returning the
+  T2.12 result JSON (`ref.entity` is the entity's id string; for a face, `ref.id` is the face id).
+- `viewport-3d` carries `data-camera`, the JSON `{"eye":[x,y,z],"target":[x,y,z],"fov":<vertical radians>}` of its current
+  camera (up +z, perspective over the element's CSS box), updated on every camera change; wheel zoom and pan keep the
+  view direction. The active tool's button has `aria-pressed="true"` and every other `tool-*` button `aria-pressed="false"`.
+- Each direct-modelling tool commits one `bim sketch` command built from its clicks (each click uses the inference point
+  under the cursor) and the typed value, which replaces the length, angle or factor of the pointer's offset from the
+  tool's last point and keeps its direction or side: push/pull extrudes towards the pointer, offset goes to the
+  pointer's side (towards the face centre = inward, positive), rotate turns towards the pointer.
+- Clicking a Shape or ComponentInstance with `tool-select` selects it; move, rotate, scale and make-component act on the
+  selected Shape as all its faces. Face and edge tools on a ComponentInstance edit its definition's Shape.
+- `tool-move`: click the start, then click or type the distance; pressing and releasing Ctrl/Cmd while it runs toggles
+  copy, and `x5`/`5x`/`/5` typed after a copy make the result the single `move` with `copy` and `array`.
+  `tool-rotate`: click the centre, then the start direction, then click or type degrees, about +z. `tool-scale`: click
+  the origin, then type a factor (`2`) or `x,y,z` factors. `tool-pushpull`: click the face, then click or type the
+  distance; pressing and releasing Ctrl/Cmd while it runs sets `new: true`; double-clicking a face repeats the last
+  distance. `tool-offset`: click the face, then click or type the distance. `tool-followme`: click the face, then each
+  path point; Enter sweeps. `tool-tape`: click the start, then click or type the length; it creates a Guide whose `point`
+  is the end point (measured from an edge, with that edge's direction). `tool-eraser` erases the edge under the cursor.
+  `tool-paint` applies the product selected in `catalog-products` to the face under the cursor, creating its Product
+  entity as `bim catalog use` would. `make-component` makes the selected Shape a component (`make_component`; the Studio
+  chooses the ids and name).
+- A push/pull, offset, move, rotate or scale whose distance, angle or factor is zero commits nothing; double-clicking a
+  face with `tool-pushpull` commits only the repeated distance. `zoom-extents` (Shift+Z) frames the model: every vertex of
+  every placed Shape and ComponentInstance projects inside `viewport-3d`, and the model's projected extent spans at least
+  30 % of the viewport's width or height.
+- `scenes` contains `scene-save`, which saves the current camera as a new Scene entity, and one `scene-<id>` button per
+  Scene, which restores that camera.
 
 Behaviour: clicking two points on the plan with `tool-wall` active creates a Wall; selecting an
 entity (3D pick or 2D click) fills `props-panel`; editing `prop-height` updates the model and both
