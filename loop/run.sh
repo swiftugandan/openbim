@@ -5,7 +5,7 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 MAX_ITER=${MAX_ITER:-100}             # session attempts before the loop stops on its own
-SESSION_TIMEOUT=${SESSION_TIMEOUT:-1800}  # seconds; only cuts off a hung session
+SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}  # seconds; only cuts off a hung session
 MODEL=${LOOP_MODEL:-opus}             # the session itself; stages pick their own models
 mkdir -p .loop/sessions .loop/verdict .loop/attempts .loop/probes
 
@@ -60,10 +60,39 @@ $id: $(grep -m1 -E "^- \[.\] $id:" TASKS.md | sed -E 's/^- \[.\] [^:]+: //')
 
 Verification: $(field "$id" Verification) (passed, rerun by loop/run.sh)
 Audit: PASS (session log $(basename "$2"))
+Tier: $(tier_of "$id" "$(cat ".loop/attempts/$id")")
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
   event "COMMITTED $id $(git rev-parse --short HEAD)"
+}
+
+# --- model tiers ------------------------------------------------------------
+# A task's `Builder:` (sonnet | opus | fable, default opus) sets its tier. A fresh retry after a
+# failed attempt escalates one tier, so fable runs only on high-stakes tasks or on a task about
+# to block its dependents.
+tier_of() { # tier_of <id> <attempt>
+  local t; t=$(field "$1" Builder); t=${t:-opus}
+  if [ "$2" -ge 2 ]; then case $t in sonnet) t=opus ;; opus) t=fable ;; esac; fi
+  echo "$t"
+}
+stage_model() { # stage_model <tier> build|fix|audit -> "`model`, effort `e`" as the prompt renders it
+  case "$1/$2" in
+    sonnet/build|sonnet/fix) echo '`sonnet`, effort `max`' ;;
+    sonnet/audit|opus/audit|opus/fix) echo '`opus`, effort `high`' ;;
+    opus/build) echo '`opus`, effort `medium`' ;;
+    fable/*) echo '`fable`' ;;
+  esac
+}
+plan_stage() { # plan_stage <tier> <id>: sonnet builds from an opus plan
+  [ "$1" = sonnet ] || return 0
+  cat <<EOF
+- **PLAN**: Agent, model \`opus\`, effort \`high\`, description \`PLAN: $2\`.
+  Give it the task block, the hard rules, the relevant \`spec/\` files, the judge files and the Scout report.
+  It writes \`.loop/probes/$2/plan.md\`: the module layout and public signatures, the algorithm for each
+  Spec clause with its edge cases and tolerances, the order to build and test in, and the pitfalls the judge
+  will catch. It writes no product code. Hand the whole plan to BUILD and to the fix round.
+EOF
 }
 
 # --- one session ------------------------------------------------------------
@@ -73,11 +102,11 @@ run_session() { # run_session <id> <attempt> <log>
 Attempt $((attempt - 1)) failed: $(cat ".loop/fail-$id" 2>/dev/null). You start again from the
 committed tree; avoid that failure.
 "
-  local builder effort=""
-  builder=$(field "$id" Builder); builder=${builder:-opus}
-  [ "$builder" = opus ] && effort=", effort \`medium\`"
+  local tier; tier=$(tier_of "$id" "$attempt")
   ID=$id ATTEMPT=$attempt BLOCK=$(block_of "$id") VERIFY=$(field "$id" Verification) PREVIOUS=$previous \
-    BUILDER=$builder EFFORT=$effort \
+    TIER=$tier PLAN=$(plan_stage "$tier" "$id") \
+    BUILD_MODEL=$(stage_model "$tier" build) FIX_MODEL=$(stage_model "$tier" fix) \
+    AUDIT_MODEL=$(stage_model "$tier" audit) \
     perl -pe 's/\{\{(\w+)\}\}/$ENV{$1}/g' loop/prompt.md > "${log%.jsonl}.prompt.md"
   perl -e 'alarm shift; exec @ARGV' "$SESSION_TIMEOUT" \
     claude -p --model "$MODEL" --permission-mode bypassPermissions \
@@ -107,7 +136,7 @@ for ((iter = 1; iter <= MAX_ITER; iter++)); do
   log=".loop/sessions/$(date +%Y%m%d-%H%M%S)-$id-a$attempt.jsonl"
   echo "$id $attempt $log" > .loop/current
   rm -f ".loop/verdict/$id"
-  event "SESSION $id attempt $attempt -> $log"
+  event "SESSION $id attempt $attempt tier $(tier_of "$id" "$attempt") -> $log"
 
   pre=$(git rev-parse HEAD)
   run_session "$id" "$attempt" "$log"

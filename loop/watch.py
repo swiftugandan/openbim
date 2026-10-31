@@ -7,9 +7,9 @@ usage: loop/watch.sh [session.jsonl] [--once]
 import glob, json, os, shutil, signal, sys, time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-STAGES = ["SCOUT", "BUILD", "CHECK", "AUDIT", "COMMIT"]
+STAGES = ["SCOUT", "PLAN", "BUILD", "CHECK", "AUDIT", "COMMIT"]
 SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-COLOR = {"SCOUT": 36, "BUILD": 34, "CHECK": 33, "AUDIT": 35, "COMMIT": 32, "LOOP": 32, "SESSION": 37}
+COLOR = {"SCOUT": 36, "PLAN": 96, "BUILD": 34, "CHECK": 33, "AUDIT": 35, "COMMIT": 32, "LOOP": 32, "SESSION": 37}
 DIM, BOLD, RED, GREEN = "\033[2m", "\033[1m", "\033[31m", "\033[32m"
 RESET = "\033[0m"
 
@@ -23,7 +23,7 @@ class Session:
 
     def __init__(self, path):
         self.path, self.offset, self.buf = path, 0, ""
-        self.spawns = {}        # Agent tool_use id -> stage label (SCOUT/BUILD/AUDIT)
+        self.spawns = {}        # Agent tool_use id -> stage label (SCOUT/PLAN/BUILD/AUDIT)
         self.stage, self.stage_active = None, False
         self.ended = False
         self.feed = []          # (clock, tag, text)

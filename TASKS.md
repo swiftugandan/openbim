@@ -7,7 +7,7 @@ spatial-engineering platform in Rust (native CLI + WebAssembly) with a web Studi
 Fields per task:
 - `Files:` the only paths the task may change. `Opens:` tasks whose output must exist (a `[!]` there blocks this task).
 - `Needs:` paths that must exist before building (oracles from `loop/setup.sh`, the IFC corpus); missing → blocked.
-- `Builder:` model for the Build stage (default `opus` at medium effort; `fable` for the hardest tasks).
+- `Builder:` model tier. `sonnet` (tightly specified, oracle-checked work): an opus PLAN, sonnet BUILD at max effort, opus AUDIT. `opus` (default): opus BUILD at medium effort, opus AUDIT. `fable` (high stakes: exact-geometry foundations and the incremental engine that most later tasks inherit): fable for every stage. A retry after a failed attempt escalates one tier.
 - `Verification:` one command, an external judge in `judges/` written before any building. Builders never edit `judges/` or `spec/`.
 
 Contracts live in `spec/` (schema, CLI, MCP, plugins, web) and are frozen. Judges use independent
@@ -75,12 +75,14 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T1.4: bim-struct: 2D frame direct-stiffness solver
   - Files: Cargo.lock, crates/engines/structural/
   - Opens: T1.1
+  - Builder: sonnet
   - Verification: bash judges/T1.4.sh
   - Spec: Crate `bim-struct` at crates/engines/structural (the T1.1 workspace glob already includes it). `Frame::new()`, `add_node(x, y) -> usize`, `add_member(i, j, e, a, iz) -> usize` (Euler–Bernoulli beam-column), `fix(node, ux: bool, uy: bool, rz: bool)`, `load(node, fx, fy, mz)`, `analyze() -> Result<Results, String>` (Err on a singular/unstable structure). `Results::displacement(node) -> (ux, uy, rz)`, `reaction(node) -> (fx, fy, mz)`, `member_end_forces(m) -> [f64; 6]` in local axes (N1, V1, M1, N2, V2, M2). Conventions: global x right, y up, rotation counter-clockwise positive; a reaction is the force the support exerts on the structure; member end forces are the forces the nodes exert on the member, in local axes (x from node i to node j).
 
 - [ ] T1.5: bim-cli: headless `bim` command over the document
   - Files: Cargo.lock, crates/bim-cli/
   - Opens: T1.1
+  - Builder: sonnet
   - Verification: bash judges/T1.5.sh
   - Spec: Crate `bim-cli` producing binary `bim`. `bim init <dir>` creates `<dir>/doc.oplog` (empty). `bim apply <dir> <ops-file>` appends ops, one per line: `create <seed> <kind>`, `set <seed> <key> num <f64>|text <word>|ref <seed>`, `delete <seed>` (ids are `EntityId::derive(seed)`); an invalid op exits 2 and leaves the log unchanged. `bim hash <dir>` prints `content_hash` as 16 lowercase hex digits. `bim validate <dir>` exits 0 when there are no dangling refs, else prints one line per dangling ref and exits 1. `bim diff <dirA> <dirB>` prints `same` and exits 0 when hashes match, else `differ` and exits 1. Blank lines in an ops file are ignored; any other error (missing directory, unreadable file) prints a message to stderr and exits 2.
 
@@ -93,8 +95,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 - [ ] T1.7: CRDT semantic layer: materialized ConflictDiagnostic nodes, constraint conflicts, proptest
   - Files: Cargo.lock, crates/bim-crdt/
-  - Opens: T1.6, T1.3
-  - Builder: fable
+  - Opens: T1.2, T1.6, T1.3
   - Verification: bash judges/T1.7.sh
   - Spec: Separate syntactic merge (T1.2, unchanged guarantees) from semantic evaluation: `Replica::evaluate() -> Evaluated { document, diagnostics }` where `document` contains one `ConflictDiagnostic` entity per diagnostic (id derived from `"conflict:" + entity + key + target`, props per spec/schema.md, `reason` one of `dangling_ref`, `constraint_unsatisfiable`, `dependency_cycle`). Constraint entities (spec/schema.md `Constraint`, with `a`/`b` referencing `Point` entities) are evaluated with bim-solver after merge; when concurrent edits make a connected constraint group Inconsistent, every constraint in that group gets a `constraint_unsatisfiable` diagnostic and no geometry is changed. A Ref cycle yields `dependency_cycle` diagnostics. Never panics. Judge uses proptest (10,000 cases) over creates, sets, deletes, constraint mutations and offline splits/merges among 3–5 peers.
   - Details: `Replica::evaluate(&self) -> Evaluated`, `pub struct Evaluated { pub document: bim_doc::Document, pub diagnostics: Vec<Diagnostic> }` with one entry per ConflictDiagnostic node; T1.2's `ConflictDiagnostic` and `diagnostics()` are unchanged; `evaluate` does not mutate the replica and `document()` never contains diagnostic nodes. Node props: `entity` (Ref), `key` (Text), `target` (Ref, when there is one), `reason` (Text). `dangling_ref`: the dangling top-level Ref (same set as `diagnostics()`). `constraint_unsatisfiable`: `entity` = the Constraint. `dependency_cycle`: one node per entity lying on a Ref cycle among live entities (self-references included). Only Constraints of kind `distance` (Num `value`) or `coincident` whose `a`/`b` reference live Points with Num `x`/`y` are solved; groups are connected components over shared Points; malformed or dangling constraints are skipped, not errors; satisfiable groups' solved `x`/`y` are written into `Evaluated.document`; Points in unsatisfiable groups and unconstrained Points keep their merged coordinates.
@@ -105,6 +106,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/bim-geom/
   - Opens: T1.1
   - Needs: .oracles/py/bin/python
+  - Builder: fable
   - Verification: bash judges/T2.1.sh
   - Spec: Crate `bim-geom`: `Point2/Point3/Vec3` (f64), robust `orient2d`, `orient3d`, `incircle` (adaptive exact arithmetic: correct sign for all f64 inputs), `Polygon { outer, holes }` with `area`, `contains`, `triangulate` (ear clipping with holes, returns index triples). `Solid` = closed half-edge mesh with planar polygonal faces: `extrude(&Polygon, z0, height)`, `sweep(&Polygon, path: &[Point3])` (profile in the plane normal to the path start, mitred at each path vertex), `volume`, `area`, `centroid`, `is_closed_manifold`, `euler_characteristic` (V − E + F, = 2 for genus 0), `to_stl(&Path)` ASCII. Judge compares against trimesh on exported STL and closed forms.
   - Details: `Point2 { x, y }`, `Point3 { x, y, z }`, `Vec3 { x, y, z }` are Copy with pub f64 fields and `new`. `orient2d(a, b, c)`, `orient3d(a, b, c, d)`, `incircle(a, b, c, d)` are crate-root functions taking points by value, returning f64 with exact sign for |coords| in {0} ∪ [2^-100, 2^100] (Shewchuk conventions: orient2d > 0 for CCW; orient3d = det[a−d; b−d; c−d] > 0 when d is below CCW abc; incircle > 0 when d is inside CCW abc). `Polygon { pub outer: Vec<Point2>, pub holes: Vec<Vec<Point2>> }`, outer CCW, holes CW; `area()` net positive; `contains(&self, p: Point2) -> bool` (boundary unspecified); `triangulate(&self) -> Vec<[usize; 3]>` indexes outer ++ holes in order, edge-to-edge, no added points. `Solid::extrude(&Polygon, z0, height) -> Solid` and `Solid::sweep(&Polygon, path: &[Point3]) -> Solid` are associated functions; sweep puts the profile's 2D origin on `path[0]`. Methods `volume()`, `area()`, `centroid() -> Point3`, `is_closed_manifold()`, `euler_characteristic()` (integer), `to_stl(&self, path: &Path) -> io::Result<()>` (ASCII, round-trip precision, watertight edge-to-edge triangulation).
@@ -129,7 +131,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/bim-solver/
   - Opens: T1.3
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T2.4.sh
   - Spec: Extend bim-solver (T1.3 API unchanged): `Sketch3::new()`, `add_point3(x,y,z)`, `add_datum(Plane { normal, offset })`; constraints `Coincident3, Distance3, Parallel3, Perpendicular3, Angle3, OnDatum(point, datum)` (datum-locked). Equations are built as expression trees and differentiated symbolically (`Expr::diff`), not by finite differences. `decompose() -> Vec<Subsystem>` splits the constraint graph into independently solvable components (connected components, then rigid-cluster ordering), and `solve()` returns `SolveReport3 { subsystems: Vec<SubReport { points, status, dof }> }` so under/over-constrained parts are reported individually. Judge compares DOF counts and solved positions with python-solvespace.
   - Details: `Sketch3::add_point3(x, y, z) -> Point3Id`, `add_datum(Plane { normal: [f64; 3], offset: f64 }) -> DatumId` (plane {p : normal·p = offset}), `add(c: Constraint3)`, `point3(id) -> (f64, f64, f64)`; `Point3Id`, `DatumId` derive Debug, Clone, Copy, PartialEq. `Constraint3` is a new enum (2D `Constraint` unchanged): `Coincident3(p, q)`, `Distance3(p, q, d)`, `Parallel3(a, b, c, d)`, `Perpendicular3(a, b, c, d)`, `Angle3(a, b, c, d, θ)` (unsigned, radians in [0, π]), `OnDatum(p, datum)`; datums are fixed. `Expr` is Clone with `Expr::var(i)`, `Expr::constant(c)`, `sqrt(self)`, `+ - * /` and unary `-` on owned `Expr`, `diff(&self, var) -> Expr`, `eval(&self, &[f64]) -> f64`. `decompose(&self) -> Vec<Subsystem>`, `Subsystem { points: Vec<Point3Id>, .. }`: connected components of the graph joining each constraint's points (an unconstrained point is its own subsystem); `SolveReport3.subsystems` has the same partition. Per subsystem dof = 3·points − rank(J); status uses T1.3's tolerances: Inconsistent if residual > 1e-6, else UnderConstrained if dof > 0, else OverConstrained if some constraint is redundant (removing its equations leaves rank(J) unchanged), else WellConstrained. Solving one subsystem never moves another's points; an Inconsistent subsystem does not stop the others solving.
@@ -163,7 +164,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/bim-draw/, crates/bim-cli/
   - Opens: T2.6, T2.7
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T2.8.sh
   - Spec: Crate `bim-draw` builds a `Drawing` (layers, polylines, hatched regions, dimension objects with entity references) for the views in spec/cli.md: cut geometry from T2.5 on layer `CUT` with hatches on `HATCH`, beyond geometry from T2.6 HLR on `PROJECTION`/`HIDDEN`, `Dimension` entities on `DIMENSION`. `bim export --format svg --view …` writes it with the layer ids, stroke widths and `data-entity` attributes of spec/cli.md. Associative: after an edit, the dimension text equals the new measured distance. Judge recomputes cut areas with shapely from manifold3d sections.
   - Details: View geometry, SVG units, ring/hatch, dash, inheritance and Dimension rules are in spec/cli.md ("View geometry").
@@ -189,6 +189,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T3.2: SQLite store, revisions, commit/log/diff
   - Files: Cargo.toml, Cargo.lock, crates/bim-store/, crates/bim-cli/
   - Opens: T1.7
+  - Builder: sonnet
   - Verification: bash judges/T3.2.sh
   - Spec: Crate `bim-store` (rusqlite, bundled): `<dir>/bim.sqlite` holds the CRDT state, the op log (content-addressed: op id = hash of its canonical encoding) and revisions; every `bim apply` is one SQLite transaction; `doc.oplog` stays as the text journal. CLI `commit`, `log`, `diff <dir> <revA> <revB>` per spec/cli.md. Judge: sqlite3 `PRAGMA integrity_check`, a process killed mid-apply leaves the previous state, revision diffs match.
   - Details: `log` op ids, revision diff keys and exit codes are in spec/cli.md.
@@ -196,6 +197,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T3.3: WebSocket sync between peers
   - Files: Cargo.toml, Cargo.lock, crates/bim-sync/, crates/bim-cli/
   - Opens: T3.2
+  - Builder: sonnet
   - Verification: bash judges/T3.3.sh
   - Spec: Crate `bim-sync`: state-based delta sync over WebSocket (tungstenite): peers exchange version vectors, then the missing CRDT deltas; idempotent and order-insensitive. `bim sync serve` / `bim sync` per spec/cli.md. Judge: three project dirs edited offline (including concurrent edits to the same entity and a delete under a reference) sync through one server in different orders and end with equal hashes and equal diagnostics; a server restart mid-session does not lose data.
   - Details: `bim init` gives each project dir a random 32-bit CRDT peer id persisted in `bim.sqlite` (copies share it). The server persists every accepted delta to its project dir before replying (the server dir holds the merged state) and handles concurrent clients. `bim sync` exits non-zero without changing the local document when the server is unreachable.
@@ -206,7 +208,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/bim-plugin/, crates/bim-cli/
   - Opens: T2.7
   - Needs: .oracles/rust-wasip2
-  - Builder: fable
   - Verification: bash judges/T4.1.sh
   - Spec: Crate `bim-plugin` with the traits, `EngineContext`, `Violation` and `Registry` of spec/plugins.md; the CLI resolves `solve --trade` and `validate --standard` only through the registry. A wasmtime host loads `wasm32-wasip2` components of the `rule-set` WIT world with no WASI filesystem/network, bounded fuel and memory. Judge builds its own sample plugin from source (in judges/), runs `bim validate --standard plugin.wasm`, and checks a trapping plugin and an infinite-loop plugin both exit 3.
   - Details: `bim-plugin` exports `EngineContext`, `EngineError`, `Violation`, `TradeEngine`, `StandardRuleSet`, `Registry` at the crate root. `Registry::new()` is empty; `register_engine(&mut self, Box<dyn TradeEngine>)` and `register_rule_set(&mut self, Box<dyn StandardRuleSet>)` key by `name()`/`id()` in separate namespaces; `engine(&self, name) -> Option<&dyn TradeEngine>`, `rule_set(&self, id) -> Option<&dyn StandardRuleSet>`. The CLI builds its registry from the shipped engines (no built-ins inside bim-plugin, which would create a dependency cycle). Host rules and exit codes: spec/plugins.md.
@@ -223,6 +224,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/engines/arch/, crates/bim-model/
   - Opens: T4.2
   - Needs: .oracles/py/bin/python
+  - Builder: sonnet
   - Verification: bash judges/T4.3.sh
   - Spec: Curtain wall: grid of `u_spacing × v_spacing` panels (last bay takes the remainder), mullions as rectangular solids on grid lines and the boundary, panels between mullions; Stair: `riser_count` risers of height (top − base)/riser_count with treads of depth `tread` as a stepped solid of `width`; Ramp: sloped solid. `solve --trade arch` fills `stairs[]` and `curtain_walls[]`. Judge checks counts, riser/tread values and volumes against closed forms and manifold3d.
   - Details: Curtain-wall grid lines along the wall lie at 0, u, 2u, … and L (a last bay shorter than 1e-9 is not created), heights at 0, v, … and H; panels = bays_u × bays_v; mullion_length = (bays_u + 1)·H + (bays_v + 1)·L. Mullions are `mullion_width` (in the wall plane) × `mullion_depth` (normal to the wall, centred on the centreline), centred on every grid line; verticals span level elevation to elevation + H, horizontals the full length. Panels fill each bay between mullion faces, `panel_thickness` thick, centred. A CurtainWall's glTF node is one closed mesh equal to the union of its non-overlapping pieces. Stair = union of `riser_count` blocks: block k spans [(k−1)·tread, k·tread] along the run from (x, y) in direction `angle`, full `width` centred on the run line, from base elevation to base + k·riser; `stairs[]` reports riser = (top − base)/riser_count, tread, risers. Ramp = wedge over the `length` × `width` rectangle starting at (x, y) in direction `angle`, centred, underside at base, top rising linearly from base at (x, y) to top at the far end.
@@ -231,7 +233,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/engines/structural/
   - Opens: T1.4
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T4.4.sh
   - Spec: Extend bim-struct (2D API unchanged): `Frame3` with 6-DOF nodes, 12-DOF members (`E, G, A, Iy, Iz, J`, optional shear areas `Asy, Asz` → Timoshenko shear deformation), member orientation by a reference vector, nodal loads per load case, `LoadCombination`s, `analyze() -> Results3` with displacements, reactions, local end forces and per-member envelopes (min/max of N, Vy, Vz, T, My, Mz and deflection) over combinations, sampled at ≥ 11 stations. Judge: textbook closed forms (Euler-Bernoulli and Timoshenko cantilevers, torsion, portal frames) within 0.1%, and random space frames against PyNite within 0.1%.
   - Details: API: `Frame3::new()`, `add_node(x, y, z) -> usize`, `add_member(i, j, s: Section3, reference: [f64; 3]) -> usize`, `fix(node, [bool; 6])` (ux uy uz rx ry rz), `load(node, case: &str, [f64; 6])` (accumulating), `add_combination(LoadCombination { name: String, factors: Vec<(String, f64)> })`, `analyze() -> Result<Results3, String>` (Err when singular/unstable); `Section3 { e, g, a, iy, iz, j: f64, asy: Option<f64>, asz: Option<f64> }` (pub); `Results3::displacement(&self, combo: &str, node) -> [f64; 6]`, `reaction(combo, node) -> [f64; 6]`, `member_end_forces(combo, m) -> [f64; 12]`, `envelope(m) -> Envelope { n, vy, vz, t, my, mz: [f64; 2] /* [min, max] */, deflection: f64 }`. Local x runs i→j; local z is the unit component of the reference orthogonal to x (parallel is an error); y = z × x. Iz and Asy govern the x–y plane (Φy = 12·E·Iz/(G·Asy·L²)), Iy and Asz the x–z plane; a missing shear area means none. End forces are those the nodes exert on the member, local, ordered [N1, Vy1, Vz1, T1, My1, Mz1, N2, …, Mz2]; reactions are support-on-structure, global; displacements global. Envelopes: internal actions the part beyond a station exerts on the part from node i (tension positive), at ≥ 11 equally spaced stations, min/max over combinations (cases outside every combination ignored); `deflection` = max |local transverse displacement of the axis relative to the chord between displaced ends|.
@@ -248,7 +249,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/engines/mep/, crates/bim-cli/
   - Opens: T4.1
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T4.6.sh
   - Spec: Crate `bim-mep` (TradeEngine "mep"): directed graph of Ports and Segments per MepSystem; sinks' `flow` demands, sources with fixed `pressure`; loop networks solved by Newton (global gradient / Todini) with Hardy-Cross as a reference mode; head loss Darcy-Weisbach with friction factor from Colebrook-White solved to 1e-12 (laminar 64/Re below Re 2000), plus minor losses `minor_k·ρv²/2`; length from port coordinates; continuity residual reported. Output per spec/cli.md. Judge: single pipes vs closed form (0.1%), a textbook Hardy-Cross loop with constant f (0.1%), and random networks vs EPANET (WNTR, D-W headloss; 1% because EPANET approximates Colebrook).
   - Details: Output conventions are in spec/cli.md; `--method hardy-cross` selects the reference solver and agrees with the default Newton solver to 0.1%. Elevation head (ρ·g·Δz) is not part of the contract. Above Re 2000 the friction factor is Colebrook-White (no transition interpolation).
@@ -257,6 +257,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/engines/mep/, crates/bim-model/, crates/bim-cli/
   - Opens: T4.6, T2.3
   - Needs: .oracles/py/bin/python
+  - Builder: sonnet
   - Verification: bash judges/T4.7.sh
   - Spec: Sizing: smallest nominal size (round: DN 15,20,25,32,40,50,65,80,100,125,150,200,250,300 mm; rect ducts in 50 mm steps) keeping velocity ≤ 2.0 m/s (water) or ≤ 6.0 m/s (air) and pressure gradient ≤ 400 Pa/m (water) or 1.5 Pa/m (air); rect hydraulic diameter 2wh/(w+h). Circuits: current = Σwatts/voltage, voltage drop = I·2·ρ·L/A. Segments get solids (round as 16-gon prisms). `bim clash` per spec/cli.md using the BVH: hard = positive-volume intersection, soft = clearance violation. Judge: closed forms for sizing/circuits; clash volumes vs manifold3d intersections, soft distances vs trimesh proximity.
   - Details: Nominal DN is the inside diameter in mm. A rect duct keeps its authored height; its width is the smallest multiple of 50 mm meeting the limits; velocity = |flow|/(w·h); the gradient is the Darcy-Weisbach friction loss per metre with Colebrook f at the hydraulic diameter for the solved flow. Ports referenced only by Circuits are not part of a hydraulic network; a MepSystem without Segments solves trivially. Segment solids (spec/schema.md) appear in the glTF export with `extras.id`.
@@ -275,7 +276,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
   - Opens: T5.1, T2.7
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T5.2.sh
   - Spec: `bim export --format ifc`: IfcProject/Site/Building/BuildingStorey hierarchy, IfcWall (with IfcMaterialLayerSet), IfcSlab, IfcColumn, IfcBeam, IfcOpeningElement + IfcRelVoidsElement, IfcDoor/IfcWindow fillings, IfcSpace, Pset_*Common property sets, stable GlobalIds derived from entity ids. Judge: `ifcopenshell.validate` zero errors; ifcopenshell.geom volumes per element equal bim-model volumes within 1e-4 relative.
   - Details: The GlobalId of the object exported for entity e is `ifcopenshell.guid.compress(format(u128(e.id), '032x'))`; storeys carry their Level's GlobalId and an IfcOpeningElement its Opening's. Door/window fillings get `Pset_DoorCommon`/`Pset_WindowCommon`; every exported IfcWall/IfcSlab/IfcColumn/IfcBeam/IfcSpace carries its `Pset_<Class>Common`.
@@ -284,7 +284,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
   - Opens: T5.2
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T5.3.sh
   - Spec: `bim import <dir> f.ifc`: storeys → Levels, walls/slabs/columns/beams/openings/spaces → schema entities (parametric where the IFC is a standard extrusion; otherwise kept as faceted geometry on an imported-geometry entity), placements resolved, property sets kept as props. Judge generates IFC files at run time with ifcopenshell.api (independent producer) and checks element counts and volumes within 1e-4; import → export → ifcopenshell volumes conserve within 1e-4.
   - Details: Import reads IFC4 and IFC2X3. An imported entity's id is the 26-char ULID spelling of the 128 bits of its GlobalId (so re-export reproduces it). Property-set values become props `<PsetName>.<PropName>`: labels/text → Text, numeric measures and integers → Num, IfcBoolean → Bool. An Opening's `kind` comes from its filling (IfcDoor → door, IfcWindow → window).
@@ -293,7 +292,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-model/, crates/bim-cli/
   - Opens: T5.3, T2.9
   - Needs: corpus/ifc, .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T5.4.sh
   - Spec: Every `corpus/ifc/*.ifc` file imports without error, runs `solve --trade arch|struct|mep` without error, exports to IFC4 and to SVG/DXF plan sheets per storey; per-element volume and total storey slab area computed by ifcopenshell on the original vs on the round-tripped file agree within 1e-4 relative; DXF passes ezdxf audit. Per-file runtime < 60 s.
   - Details: Corpus files may be IFC2X3 or IFC4. Per-element volume covers IfcWall, IfcSlab, IfcColumn, IfcBeam (and subtypes) with a Body representation. Storey sheets use `plan:<storey Level id>@1.2`. The 60 s limit applies per corpus file.
@@ -302,6 +300,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
   - Opens: T5.3
   - Needs: .oracles/py/bin/python
+  - Builder: sonnet
   - Verification: bash judges/T5.5.sh
   - Spec: `bim export --format ifcjson` and `bim import <dir> f.json` (ifcJSON object list with `type`, `globalId`, nested objects); round trip doc → ifcJSON → doc preserves the content hash; ifcJSON produced from an ifcopenshell file (judge converts) imports with the same element counts and volumes as importing the .ifc.
   - Details: ifcJSON is `{"type":"ifcJSON","version":"0.0.1","schemaIdentifier":"IFC4","data":[…]}`: one object per IfcRoot, `type` = IFC entity name, `globalId` in UUID form (or the 22-char form), lowerCamelCase attributes, references to IfcRoot as `{"type","ref": <globalId>}`, other entities nested inline, typed values `{"type":"IfcLabel","value":…}`. A UUID globalId maps to the same entity id as its 22-char form. (`content_hash` excludes `_created_by`/`_stamp`, spec/schema.md.)
@@ -310,6 +309,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/standards/bcf/, crates/bim-cli/
   - Opens: T3.2, T5.2
   - Needs: .oracles/py/bin/python, .oracles/bcf-xsd
+  - Builder: sonnet
   - Verification: bash judges/T5.6.sh
   - Spec: Crate `bim-bcf`: topics, comments, viewpoints (camera, components by IfcGuid derived as in T5.2), `Issue` entities mirrored in the document; `bim bcf` create/export/import per spec/cli.md. Judge validates every XML file in the bcfzip against the official buildingSMART BCF 3.0 XSDs with xmlschema and checks import(export(x)) preserves topics, comments and components.
   - Details: `bim bcf <dir> create --title <t> --entity <id> [<id>…]` prints the new topic Guid as its last stdout line; the mirrored Issue's id is that Guid (as a seed), `status` = TopicStatus, `entities` = Refs to the components. Component IfcGuids are derived as in T5.2. import(export(x)) preserves topic Guid, title, type, status, creation date (as an instant), author, description, labels; comments (Guid, date, author, text, viewpoint link); and each viewpoint's component IfcGuids. A non-zip or a reference to a missing entity exits 2 with nothing applied. `bim bcf import` mirrors every imported topic the same way (Issue id = topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to its viewpoint components).
@@ -317,6 +317,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T5.7: declarative code-rule packs (IBC, Eurocode, accessibility), hot-swappable
   - Files: Cargo.toml, Cargo.lock, crates/standards/codes/, crates/bim-cli/
   - Opens: T4.3, T4.1
+  - Builder: sonnet
   - Verification: bash judges/T5.7.sh
   - Spec: Crate `bim-codes` (StandardRuleSet) loading packs per spec/plugins.md with the full check vocabulary and the three shipped packs. `bim validate --standard ibc|eurocode|accessibility|<path>`. Judge fixtures: corridors, doors, stairs, ramps and walls just inside and just outside each limit (closed-form measured values within 1e-9), a pack file edited between two runs changes the result with no rebuild, unknown check names exit 2.
   - Details: Pack semantics, exit codes and the shipped rules are in spec/plugins.md.
@@ -335,7 +336,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/bim-mcp/
   - Opens: T6.1, T4.7, T5.7, T2.8
   - Needs: .oracles/node/node_modules/@modelcontextprotocol/sdk
-  - Builder: fable
   - Verification: bash judges/T6.2.sh
   - Spec: Binary `bim-mcp` implementing spec/mcp.md tools `query`, `get_entity`, `render_view`, `clash_matrix`, `structural_utilization` and the resources. Judge drives it with the official MCP TypeScript SDK client: initialize, list tools (schemas valid JSON Schema), call each tool, read each resource, malformed input → `isError`, server survives.
   - Details: Resource naming, query rows and error conventions are in spec/mcp.md.
@@ -344,6 +344,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/bim-mcp/
   - Opens: T6.2
   - Needs: .oracles/node/node_modules/@modelcontextprotocol/sdk
+  - Builder: sonnet
   - Verification: bash judges/T6.3.sh
   - Spec: Dry-run validation per spec/mcp.md: proposing never changes `bim hash`; the report's clash, violation, utilization and dp numbers equal those of running the CLI on a copy with the ops applied; commit applies exactly the proposed ops; a commit after an intervening change is rejected as stale; invalid ops give `valid: false` with reasons.
   - Details: An invalid proposal returns `{"valid": false, "reasons": [string, …]}` (non-empty) and its tx cannot be committed; missing or non-list `ops`, or a missing `tx`, is a tool error. `clashes.*` = number of `hard` entries of `bim clash --json`; `violations.*` = total violations of `bim validate --standard ibc|eurocode|accessibility --json` summed over the three packs; `violations.new` = violation objects present after but not before, matched by (rule, entity); `structural.max_utilization_*` = max `members[].utilization`; `mep.max_dp_*` = max |`segments[].dp`|; `conflicts` = the `conflicts` of `bim validate --json` with the ops applied.
@@ -368,7 +369,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 - [ ] T7.3: native wgpu renderer: picking, section box with capped cuts, SSAO
   - Files: Cargo.lock, crates/bim-render/, crates/bim-cli/
   - Opens: T7.2
-  - Builder: fable
   - Verification: bash judges/T7.3.sh
   - Spec: wgpu (Metal/Vulkan/DX12; WebGPU/WebGL2 in the browser via T8.1) offscreen renderer: instanced draws from T7.2, depth, ID buffer, 6-plane section box with stencil-capped cut faces in a cap colour, SSAO. CLI `bim render <dir> --eye x,y,z --target x,y,z --size WxH --out f.png [--section-box x0,y0,z0,x1,y1,z1] [--ids ids.png] [--no-ssao]` writing PNGs, and `bim render … --pick px,py` printing the entity id. Judge: pick returns the expected wall, section box exposes cap colour where the cut crosses a solid and background elsewhere, SSAO darkens an inside corner relative to an open face.
   - Details: `bim render` uses a perspective camera with up = +z; image x grows to the right of the view direction and PNG row 0 is the top; `--pick px,py` uses the same pixel coordinates, may be combined with `--out`, and prints only the entity id. `--ids` writes one uniform value for background and a distinct value per entity (instance). Section-box cut faces are filled with one flat, unlit cap colour (no lighting or SSAO), distinct from background and material shading.
@@ -377,6 +377,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, crates/bim-draw/, crates/bim-cli/
   - Opens: T2.9
   - Needs: .oracles/py/bin/python
+  - Builder: sonnet
   - Verification: bash judges/T7.4.sh
   - Spec: `bim sheet <dir> sheet.json --format svg|pdf|dxf`: sheet.json `{ "size": "A1"|"A3"|[w,h], "viewports": [{ "view", "scale", "x", "y", "w", "h" }], "title": {…} }`; viewports clipped to their frames, scaled lineweights, ISO 128 linetypes (dash patterns scale with lineweight), hatch patterns (ANSI31, concrete, insulation) per material, title block. Judge: sheet size in mm matches ISO 216, each viewport's content lies inside its frame (ezdxf/pypdf/SVG parse), dash lengths per ISO 128-20 for the given pen.
   - Details: Sheet coordinates are mm from the sheet's lower-left corner, y up; a viewport's `x, y` is its frame's lower-left corner; `scale` is n of 1:n; named sizes are ISO 216 landscape. SVG: root `width`/`height` in absolute units with a `viewBox`; layer groups keep the layer name as a token of `id`/`class`/`data-layer` (ids unique per viewport). PDF: MediaBox is the sheet. DXF: `$INSUNITS` = 4, `$LIMMIN` = (0,0), `$LIMMAX` = (w,h), model space at 1:1 mm with viewport content clipped geometrically to the frames. Lineweights are the spec/cli.md pens in paper mm at every scale; HIDDEN uses ISO 128-20 type 02 (dash 12d, gap 3d, d = pen width). Hatch by layer material: `concrete` → a pattern whose name contains `CONC`, `insulation` → one containing `INSUL`, others → ANSI31. `title` is an object of strings, each rendered as extractable text in the title block.
@@ -385,7 +386,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.toml, Cargo.lock, crates/bim-bench/, crates/bim-cli/, crates/bim-render/, crates/bim-incr/, crates/bim-model/
   - Opens: T7.3
   - Needs: .oracles/py/bin/python
-  - Builder: fable
   - Verification: bash judges/T7.5.sh
   - Spec: Crate `bim-bench`: deterministic synthetic hospital/city generator (100,000 parametric elements, ≥ 2,000,000 triangles: floors of rooms, walls with openings, columns, beams, ducts), criterion benches for compile, incremental edit, raycast and culling; `bim bench --elements 100000 --json` per spec/cli.md, measuring incremental edit latency (one wall thickness and one level elevation) and native wgpu frame time (orbit + section-box moves, 300 frames). Judge runs it and requires incremental_ms < 50, frame_ms_p95 < 16.6, triangles ≥ 2e6. Measured honestly on this machine (Intel i5-6600, Radeon R9 M395).
   - Details: Criterion benchmark ids in `bim-bench` contain `compile`, `incremental`, `raycast` and `cull`. `elements` reported is at least `--elements`. The 100k run is allowed up to 300 s of wall time.
@@ -396,7 +396,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: package.json, package-lock.json, packages/web-viewport/
   - Opens: T7.1
   - Needs: .oracles/node/node_modules/playwright-core
-  - Builder: fable
   - Verification: bash judges/T8.1.sh
   - Spec: TypeScript package per spec/web.md, consuming zero-copy views from bim-wasm (no geometry copies: GPU uploads read directly from the wasm-memory views), instanced draws, section box with caps, ID-buffer picking, `frameStats`; `mountThree` returns a Group whose BufferAttribute arrays are the wasm views. Root `package.json` defines npm workspaces. Judge (Playwright + system Chrome, headless) loads its own test page: explicit `webgl2` renders and picks the expected id, `auto` chooses a working backend, section box hides geometry outside, `mountThree` attributes share `memory.buffer`.
   - Details: Build, camera, picking and section-box conventions are in spec/web.md.
@@ -405,6 +404,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: package-lock.json, packages/web-viewport/
   - Opens: T8.1, T7.4
   - Needs: .oracles/node/node_modules/playwright-core
+  - Builder: sonnet
   - Verification: bash judges/T8.2.sh
   - Spec: `createSheetView` renders T7.4 SVG sheets to Canvas2D at devicePixelRatio (backing store = CSS size × dpr), stroke widths in device pixels = mm × px/mm × zoom, dashed linetypes from the SVG dash arrays, hatches, pan/zoom with pointer and wheel, snap glyphs at endpoints under the cursor. Judge: pixel-measured stroke widths at dpr 1 and 2, dash periods, snap glyph appears near an endpoint.
   - Details: Sheet-view conventions are in spec/web.md.
@@ -413,7 +413,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: package.json, package-lock.json, apps/studio/
   - Opens: T8.2
   - Needs: .oracles/node/node_modules/playwright-core
-  - Builder: fable
   - Verification: bash judges/T8.3.sh
   - Spec: Vite + TypeScript app per spec/web.md with a professional layout (toolbar, level picker, 3D viewport and 2D plan/sheet side by side or tabbed, properties panel, history, status bar), designed with consistent spacing, type scale and both light/dark themes. Judge (Playwright): draw walls by clicking on the plan, pick in 3D fills the properties panel, editing height updates both views, undo/redo, reload restores from IndexedDB, keyboard shortcuts, no console errors.
   - Details: Studio behaviour conventions are in spec/web.md.
@@ -422,7 +421,6 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Files: Cargo.lock, package-lock.json, apps/studio/, packages/web-viewport/, crates/bim-wasm/, packages/bim-wasm/
   - Opens: T8.3, T3.3, T5.6, T5.7
   - Needs: .oracles/node/node_modules/playwright-core, .oracles/node/node_modules/@axe-core/playwright
-  - Builder: fable
   - Verification: bash judges/T8.4.sh
   - Spec: `?sync=` collaboration through `bim sync serve` with presence avatars; Issues panel (BCF topics linked to selected entities); Validate panel listing code violations; section-box tool; responsive at 390 px and 1440 px with no horizontal overflow; zero serious/critical axe-core violations; in-browser frame-time harness on a 10,000-element model reports p95 < 16.6 ms in the status bar. Judge: two browser contexts converge after concurrent edits, axe and overflow checks, frame-time read from the status bar.
   - Details: Adds `validate(standard)` and `issues()` to the bim-wasm `Model` (spec/web.md) for the Validate and Issues panels. Studio behaviour conventions are in spec/web.md.
