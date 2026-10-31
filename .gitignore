@@ -1,0 +1,5 @@
+.loop/
+.build/
+target/
+judges/**/Cargo.lock
+.DS_Store
