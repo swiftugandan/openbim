@@ -63,7 +63,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.1.sh
   - Spec: Cargo workspace with `resolver = "2"` and members = ["crates/bim-*", "crates/engines/*"]. Crate `bim-doc` exports `EntityId(u128)` with `EntityId::derive(seed: &str)` (deterministic, distinct seeds give distinct ids), `Value` enum (`Num(f64)`, `Text(String)`, `Ref(EntityId)`), `Entity { id, kind: String, props: BTreeMap<String, Value> }`, `Op` enum (`Create { id: EntityId, kind: String }`, `Set { id: EntityId, key: String, value: Value }`, `Delete { id: EntityId }`), `Document::new()`, `Document::apply(&mut self, op: Op) -> Result<(), DocError>` (Set or Delete on a missing id is an error; Create of an existing id is an error), `get(id) -> Option<&Entity>`, `len()`, `content_hash() -> u64` (deterministic, independent of insertion order, changes on any prop change), `dangling_refs() -> Vec<(EntityId, String)>` (props whose `Ref` target does not exist), `log() -> &[Op]` (applied ops only, in order). All public types derive Debug, Clone, PartialEq; `EntityId` also Copy, Eq, Ord, Hash; `DocError` derives Debug.
 
-- [ ] T1.2: bim-crdt: state-based CRDT replica with conflict diagnostics
+- [x] T1.2: bim-crdt: state-based CRDT replica with conflict diagnostics
   - Files: Cargo.lock, crates/bim-crdt/
   - Opens: T1.1
   - Verification: bash judges/T1.2.sh
