@@ -1,0 +1,9 @@
+[package]
+name = "bim-ifc"
+description = "ISO 10303-21 (STEP physical file) streaming reader/writer and typed IFC4 / IFC2X3 entity access"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
