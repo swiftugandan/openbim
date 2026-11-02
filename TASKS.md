@@ -138,7 +138,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-spatial`: `Aabb { min: [f64;3], max: [f64;3] }`; `RStarTree<T>` (insert with forced reinsert, remove, bulk load (STR), `query_intersects(&Aabb)`, `nearest(p, k)`); `Bvh` built with SAH over triangles (`Bvh::build(&[[ [f64;3];3 ]])`), `raycast(origin, dir) -> Option<(tri, t)>` (closest hit, Möller–Trumbore), `overlaps(&Bvh) -> Vec<(usize, usize)>` triangle-pair candidates. Judge checks equality with brute force on 100k random items and timing in release: 100k R*-tree bulk load < 300 ms, mean raycast on 1M triangles < 1 ms.
   - Details: `Aabb` is Copy with pub fields; intersection is closed (touching counts). `RStarTree<T>`: `new()`, `bulk_load(Vec<(Aabb, T)>) -> Self`, `insert(&mut self, b: Aabb, item: T)`, `remove(&mut self, b: &Aabb, item: &T) -> bool where T: PartialEq` (removes one entry with equal box and item), `len()`, `query_intersects(&self, q: &Aabb) -> Vec<&T>` (each match once), `nearest(&self, p: [f64; 3], k: usize) -> Vec<&T>` (min(k, len) items by ascending point-to-box distance, 0 inside). `Bvh::build(&[[[f64; 3]; 3]]) -> Bvh`; `raycast(&self, origin, dir) -> Option<(usize, f64)>` closest hit with t > 0 in units of `dir`, two-sided; `overlaps(&self, other: &Bvh) -> Vec<(usize, usize)>` each (self, other) pair whose triangle AABBs intersect, once.
 
-- [ ] T2.4: 3D constraint solver with symbolic Jacobians and DOF decomposition
+- [x] T2.4: 3D constraint solver with symbolic Jacobians and DOF decomposition
   - Files: Cargo.lock, crates/bim-solver/
   - Opens: T1.3
   - Needs: .oracles/py/bin/python

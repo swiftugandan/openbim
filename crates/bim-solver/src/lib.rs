@@ -1,5 +1,10 @@
-//! `bim-solver`: a 2D geometric constraint solver with degree-of-freedom
-//! analysis.
+//! `bim-solver`: 2D and 3D geometric constraint solvers with
+//! degree-of-freedom analysis.
+//!
+//! The 3D solver ([`Sketch3`], [`Constraint3`], datum [`Plane`]s) builds its
+//! equations as symbolic [`Expr`] trees, differentiates them exactly and
+//! solves each connected subsystem independently; see [`Sketch3`] for its
+//! equations and classification rules. The rest of this page describes the 2D [`Sketch`].
 //!
 //! A [`Sketch`] owns a set of points (each with two unknown coordinates) and a
 //! list of [`Constraint`]s. [`Sketch::solve`] moves the points so that every
@@ -57,7 +62,14 @@
 //! 3. [`Status::OverConstrained`] if `m > rank` (redundant but consistent);
 //! 4. [`Status::WellConstrained`] otherwise.
 
+mod expr;
 mod linalg;
+mod sketch3;
+
+pub use expr::Expr;
+pub use sketch3::{
+    Constraint3, DatumId, Plane, Point3Id, SolveReport3, SubReport, Subsystem, Sketch3,
+};
 
 use std::f64::consts::PI;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -270,7 +282,8 @@ impl Sketch {
         let m = self.equation_count();
         if m > 0 && n > 0 {
             let mut x = self.coords.clone();
-            levenberg_marquardt(&self.constraints, &mut x, m);
+            let constraints = &self.constraints;
+            levenberg_marquardt(|x, f, j| evaluate(constraints, x, f, j), &mut x, m);
             if x.iter().all(|v| v.is_finite()) {
                 self.coords = x;
             }
@@ -438,14 +451,20 @@ fn evaluate(constraints: &[Constraint], x: &[f64], f: &mut [f64], mut jac: Optio
 
 /// Levenberg–Marquardt with Nielsen damping updates, minimising `½‖F(x)‖²`.
 /// Updates `x` in place.
-fn levenberg_marquardt(constraints: &[Constraint], x: &mut [f64], m: usize) {
+///
+/// `eval(x, f, jac)` writes the `m` residuals at `x` into `f` and, when `jac`
+/// is given, the `m × n` row-major Jacobian (overwriting it).
+pub(crate) fn levenberg_marquardt<E>(eval: E, x: &mut [f64], m: usize)
+where
+    E: Fn(&[f64], &mut [f64], Option<&mut [f64]>),
+{
     let n = x.len();
     let mut f = vec![0.0; m];
     let mut j = vec![0.0; m * n];
     let mut f_new = vec![0.0; m];
     let mut x_new = vec![0.0; n];
 
-    evaluate(constraints, x, &mut f, Some(&mut j));
+    eval(x, &mut f, Some(&mut j));
     let mut cost = 0.5 * dot(&f, &f);
     let mut lambda = -1.0; // initialised from JᵀJ on first iteration
     let mut nu = 2.0;
@@ -517,12 +536,12 @@ fn levenberg_marquardt(constraints: &[Constraint], x: &mut [f64], m: usize) {
             for p in 0..n {
                 x_new[p] = x[p] + h[p];
             }
-            evaluate(constraints, &x_new, &mut f_new, None);
+            eval(&x_new, &mut f_new, None);
             let cost_new = 0.5 * dot(&f_new, &f_new);
             let rho = (cost - cost_new) / predicted;
             if rho > 0.0 && cost_new.is_finite() {
                 x.copy_from_slice(&x_new);
-                evaluate(constraints, x, &mut f, Some(&mut j));
+                eval(x, &mut f, Some(&mut j));
                 cost = cost_new;
                 lambda *= (1.0f64 / 3.0).max(1.0 - (2.0 * rho - 1.0).powi(3));
                 nu = 2.0;
