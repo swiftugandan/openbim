@@ -35,7 +35,7 @@ cat > bin/claude <<'EOF'
 while [ $# -gt 0 ]; do [ "$1" = --cloud ] && { prompt=$2; break; }; shift; done
 id=$(printf '%s\n' "$prompt" | sed -nE 's/^You are the session for task (T[0-9.]+), attempt ([0-9]+).*/\1/p')
 attempt=$(printf '%s\n' "$prompt" | sed -nE 's/^You are the session for task (T[0-9.]+), attempt ([0-9]+).*/\2/p')
-branch=$(printf '%s\n' "$prompt" | grep -oE 'refs/heads/loop/[^`]+' | head -1 | sed 's#refs/heads/##')
+branch=$(printf '%s\n' "$prompt" | grep -oE 'refs/heads/loop/[^`]+' | tail -1 | sed 's#refs/heads/##')
 d=$(mktemp -d); git clone -q "$ORIGIN" "$d" 2>/dev/null; cd "$d" || exit 1
 git config user.email t@example.com; git config user.name stub
 verdict=PASS
@@ -76,6 +76,10 @@ for t in T1.1 T1.2 T2.1 T2.2 T3.1; do [ "$(mark $t)" = x ] || fail "$t should be
 [ "$(cat .loop/attempts/T3.1)" = 2 ] || fail "T3.1's stray file should have failed its first attempt"
 [ ! -e stray.txt ] || fail "T3.1's stray file reached main"
 grep -q 'CONFLICT T2\.' .loop/events.log || fail "T2.x should have conflicted"
+resumed=$(grep -l 'conflicts with work landed' .loop/sessions/*-T2.*.prompt.md 2>/dev/null | wc -l | tr -d ' ')
+[ "$resumed" = 1 ] || fail "exactly one T2.x rerun should be told to reuse its branch, got $resumed"
+grep -q 'refs/heads/loop/T2\.[12]-a1-r0 && git merge --squash' $(grep -l 'conflicts with work landed' .loop/sessions/*-T2.*.prompt.md) \
+  || fail "the rerun's prompt should name the conflicting branch"
 [ "$(cat Cargo.lock)" = regenerated ] || fail "Cargo.lock conflict should have been regenerated"
 [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || fail "main should have landed"
 git ls-remote origin 'refs/heads/gate/*' | grep -q . && fail "landed gate branches should be gone"

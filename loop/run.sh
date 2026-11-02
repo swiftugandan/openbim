@@ -12,7 +12,7 @@ SESSION_TIMEOUT=${SESSION_TIMEOUT:-3600}  # seconds; only cuts off a hung sessio
 MODEL=${LOOP_MODEL:-opus}             # the session itself; stages pick their own models
 RUNNER=${RUNNER:-cloud}                # cloud | local (local runs every task here)
 PARALLEL=${PARALLEL:-4}                # cloud sessions at once
-CLOUD_TIMEOUT=${CLOUD_TIMEOUT:-7200}   # seconds before a cloud session counts as a failed attempt
+CLOUD_TIMEOUT=${CLOUD_TIMEOUT:-14400}   # seconds before a cloud session counts as a failed attempt
 POLL=${POLL:-60}                       # seconds between checks of in-flight branches
 CLOUD_ENV=${CLOUD_ENV:-env_01BpHcnvu9sLjWWCLHVgChPt}  # the cloud environment holding loop/cloud-env-setup.sh
 # Tasks the cloud cannot judge: GPU and frame-time gates, Chrome-driven UI judges, the git-ignored IFC corpus.
@@ -126,11 +126,18 @@ EOF
 }
 
 # --- one session ------------------------------------------------------------
-render_prompt() { # render_prompt <id> <attempt> <prompt-file> <git-rule> <finish>
+render_prompt() { # render_prompt <id> <attempt> <prompt-file> <git-rule> <finish> [<resume-branch>]
   local id=$1 attempt=$2 previous=""
   [ "$attempt" -gt 1 ] && previous="
 Attempt $((attempt - 1)) failed: $(cat ".loop/fail-$id" 2>/dev/null). You start again from the
 committed tree; avoid that failure.
+"
+  [ -n "${6:-}" ] && previous="$previous
+An earlier run of this task passed CHECK and AUDIT on branch \`$6\`, but it conflicts with work landed on
+main since. Do not build from scratch. Run \`git fetch origin refs/heads/$6 && git merge --squash --no-commit FETCH_HEAD\`,
+then resolve the conflicts so both the landed behaviour and this task's are kept. For \`Cargo.lock\`, restore HEAD's
+copy and regenerate it with \`cargo metadata --format-version 1\`. Skip SCOUT and PLAN, and give BUILD only the
+conflict resolution and whatever the judge then reports. Run CHECK and AUDIT in full as written below.
 "
   local tier; tier=$(tier_of "$id" "$attempt")
   ID=$id ATTEMPT=$attempt BLOCK=$(block_of "$id") VERIFY=$(field "$id" Verification) PREVIOUS=$previous \
@@ -155,14 +162,14 @@ Then stop. Do not tick TASKS.md and do not commit; the loop does both after re-c
 }
 
 dispatch() { # dispatch <id> <attempt> <log> <branch>: start a cloud session and return
-  local id=$1 attempt=$2 log=$3 branch=$4 prompt="${3%.jsonl}.prompt.md" out="${3%.jsonl}.dispatch"
+  local id=$1 attempt=$2 log=$3 branch=$4 resume=${5:-} prompt="${3%.jsonl}.prompt.md" out="${3%.jsonl}.dispatch"
   render_prompt "$id" "$attempt" "$prompt" \
     "- Do not run \`git stash\`, \`git reset\` or \`git checkout\`, do not open a pull request, and never push to \`main\`. Only the final step below commits or pushes." \
     "Finish by committing every change under Files: and pushing once, as the very last thing you do, even on failure
 (use \`git commit --allow-empty\` if there is nothing to commit). Do not push before this point.
 The commit message's last line must be exactly \`Verdict: PASS\` if the final CHECK and AUDIT both passed,
 otherwise \`Verdict: FAIL: <one-line reason>\`. Then run \`git push origin HEAD:refs/heads/$branch\` and stop.
-Do not tick TASKS.md; the loop does that after re-checking on its own machine."
+Do not tick TASKS.md; the loop does that after re-checking on its own machine." "$resume"
   # --cloud insists on a terminal even though it only creates the session and exits; `script` gives it one.
   perl -e 'alarm 180; exec @ARGV' script -q "$out" claude \
     --settings "{\"remote\":{\"defaultEnvironmentId\":\"$CLOUD_ENV\"}}" --cloud "$(cat "$prompt")" < /dev/null > /dev/null 2>&1
@@ -213,8 +220,9 @@ poll_inflight() { # gate and land each finished cloud session, one at a time
       rm -f "$f"; acted=1
       [ "$(head -1 ".loop/verdict/$id")" = PASS ] || { settle "$id" "$attempt" "$log"; continue; }
       if ! bring_in; then
-        # A conflict with work landed since this session started is not the task's failure:
-        # run it again from the new main, without using up an attempt or escalating its tier.
+        # A conflict with work landed since this session started is not the task's failure: run it
+        # again from the new main, reusing this branch, without using up an attempt or escalating its tier.
+        echo "$branch" > ".loop/resume-$id"
         echo $(( $(cat ".loop/rebases/$id" 2>/dev/null || echo 0) + 1 )) > ".loop/rebases/$id"
         echo $(( attempt - 1 )) > ".loop/attempts/$id"
         event "CONFLICT $id on $branch; will run again from new main"
@@ -276,7 +284,7 @@ schedule() { # block what can never start, then start what can
 
     rebases=$(cat ".loop/rebases/$id" 2>/dev/null || echo 0)
     branch="loop/$id-a$attempt-r$rebases"
-    session=$(dispatch "$id" "$attempt" "$log" "$branch")
+    session=$(dispatch "$id" "$attempt" "$log" "$branch" "$(cat ".loop/resume-$id" 2>/dev/null)")
     if [ -z "$session" ]; then
       echo $(( attempt - 1 )) > ".loop/attempts/$id"
       dispatch_failures=$((dispatch_failures + 1))
