@@ -186,12 +186,12 @@ fn hash_is_zero_padded_to_sixteen_digits() {
     // About one document in sixteen hashes to a value below 2^60; find such a model by search.
     let hash_of = |n: usize| {
         let mut doc = Document::new();
-        create(&mut doc, &format!("e{n}"), "W");
+        create(&mut doc, &format!("e{n}"), "Wall");
         doc.content_hash()
     };
     let n = (0..10_000).find(|&n| hash_of(n) < 1 << 60).expect("a leading-zero hash among 10000 models");
     let s = Scratch::new();
-    let dir = s.project("p", &format!("create e{n} W\n"));
+    let dir = s.project("p", &format!("create e{n} Wall\n"));
     let digits = hash(&dir);
     assert_eq!(digits, format!("{:016x}", hash_of(n)));
     assert_eq!(digits.len(), 16);
@@ -262,7 +262,7 @@ fn diff_needs_two_valid_projects() {
 #[test]
 fn validate_is_silent_and_exits_0_without_dangling_refs() {
     let s = Scratch::new();
-    for ops in ["", A_OPS, "create a W\nset a self ref a\nset a t text ghost\n"] {
+    for ops in ["", A_OPS, "create a Wall\nset a self ref a\nset a t text ghost\n"] {
         let dir = s.project("p", ops);
         let run = bim(&[&"validate", &dir]).expect(0);
         assert_eq!((run.out.as_str(), run.err.as_str()), ("", ""), "{ops}");
@@ -327,8 +327,8 @@ fn an_op_the_document_refuses_rejects_the_whole_file() {
             "create door Opening\nset door width num 0.9\nset wall height num 4\nset ghost x num 1\n",
             ":4: entity `ghost` not found",
         ),
-        ("a duplicate create inside one file", "create fresh W\ncreate fresh W\n", ":2: entity `fresh` already exists"),
-        ("an op on an entity the file deleted", "create fresh W\ndelete fresh\nset fresh k num 1\n", ":3: entity `fresh` not found"),
+        ("a duplicate create inside one file", "create fresh Wall\ncreate fresh Wall\n", ":2: entity `fresh` already exists"),
+        ("an op on an entity the file deleted", "create fresh Wall\ndelete fresh\nset fresh k num 1\n", ":3: entity `fresh` not found"),
     ];
     for (what, text, message) in cases {
         let file = s.write("refused.ops", text);
@@ -360,7 +360,7 @@ fn syntax_errors_exit_2_and_name_the_line() {
         ("comment syntax does not exist", "# note\n", "unknown op `#`"),
     ];
     for (what, text, message) in cases {
-        let file = s.write("syntax.ops", format!("\ncreate ok W\n{text}"));
+        let file = s.write("syntax.ops", format!("\ncreate ok Wall\n{text}"));
         let run = bim(&[&"apply", &dir, &file]).rejected();
         assert!(run.err.contains("syntax.ops:3:"), "{what}: {}", run.err);
         assert!(run.err.contains(message), "{what}: {}", run.err);
@@ -389,7 +389,7 @@ fn reserved_keys_are_rejected_in_op_files() {
     let dir = s.project("p", A_OPS);
     let before = journal(&dir);
     for key in ["_name", "_schema", "_created_by", "_stamp", "_mine"] {
-        let file = s.write("res.ops", format!("create ok W\nset wall {key} num 1\n"));
+        let file = s.write("res.ops", format!("create ok Wall\nset wall {key} num 1\n"));
         let run = bim(&[&"apply", &dir, &file]).rejected();
         assert!(run.err.contains("res.ops:2:") && run.err.contains("reserved"), "{key}: {}", run.err);
         assert_eq!(journal(&dir), before, "{key}");
@@ -478,11 +478,11 @@ fn invalid_json_ops_files_change_nothing_and_exit_2() {
     let first = r#"{"op": "create", "id": "fresh", "kind": "Level"}"#;
     let cases = [
         ("set on a missing id", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "ghost", "key": "x", "value": 1}}]}}"#), "ops[1]: entity `ghost` not found"),
-        ("create of an existing id", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "create", "id": "wall", "kind": "W"}}]}}"#), "ops[1]: entity `wall` already exists"),
+        ("create of an existing id", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "create", "id": "wall", "kind": "Wall"}}]}}"#), "ops[1]: entity `wall` already exists"),
         ("unknown op", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "rename", "id": "wall"}}]}}"#), "unknown op `rename`"),
         ("null value", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "wall", "key": "x", "value": null}}]}}"#), "null"),
         ("reserved set", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "wall", "key": "_name", "value": "evil"}}]}}"#), "reserved"),
-        ("reserved prop at create", r#"{"schema": 1, "ops": [{"op": "create", "id": "fresh", "kind": "W", "props": {"_schema": 2}}]}"#.to_string(), "reserved"),
+        ("reserved prop at create", r#"{"schema": 1, "ops": [{"op": "create", "id": "fresh", "kind": "Wall", "props": {"_schema": 2}}]}"#.to_string(), "reserved"),
         ("schema 2", format!(r#"{{"schema": 2, "ops": [{first}]}}"#), "schema version"),
         ("malformed", format!(r#"{{"schema": 1, "ops": [{first},"#), "invalid JSON"),
     ];
@@ -579,18 +579,18 @@ fn blank_lines_are_ignored_and_a_blank_only_file_changes_nothing() {
     }
     assert_eq!(fs::metadata(dir.join("doc.oplog")).unwrap().modified().unwrap(), modified, "not even rewritten");
     // Blank lines between ops are skipped and do not reach the journal.
-    let spaced = s.write("spaced.ops", "\ncreate a W\n\n   \nset a h num 1\n\n");
+    let spaced = s.write("spaced.ops", "\ncreate a Wall\n\n   \nset a h num 1\n\n");
     let fresh = s.project("q", "");
     bim(&[&"apply", &fresh, &spaced]).expect(0);
-    assert_eq!(journal(&fresh), b"create a W\nset a h num 1.0\n");
+    assert_eq!(journal(&fresh), b"create a Wall\nset a h num 1.0\n");
 }
 
 #[test]
 fn an_ops_file_may_start_with_a_byte_order_mark() {
     let s = Scratch::new();
     let dir = s.project("p", "");
-    bim(&[&"apply", &dir, &s.write("bom.ops", "\u{feff}create a W\nset a h num 1\n")]).expect(0);
-    assert_eq!(journal(&dir), b"create a W\nset a h num 1.0\n", "the mark is not copied into the journal");
+    bim(&[&"apply", &dir, &s.write("bom.ops", "\u{feff}create a Wall\nset a h num 1\n")]).expect(0);
+    assert_eq!(journal(&dir), b"create a Wall\nset a h num 1.0\n", "the mark is not copied into the journal");
 }
 
 #[test]
@@ -629,9 +629,9 @@ fn apply_appends_and_keeps_the_existing_journal_bytes() {
     );
     // Two applies equal one apply of the concatenation.
     let (two, one) = (s.project("two", ""), s.project("one", ""));
-    bim(&[&"apply", &two, &s.write("1.ops", "create a W\nset a h num 1\n")]).expect(0);
-    bim(&[&"apply", &two, &s.write("2.ops", "set a h num 2\ncreate b W\nset b p ref a\n")]).expect(0);
-    bim(&[&"apply", &one, &s.write("3.ops", "create a W\nset a h num 1\nset a h num 2\ncreate b W\nset b p ref a\n")]).expect(0);
+    bim(&[&"apply", &two, &s.write("1.ops", "create a Wall\nset a h num 1\n")]).expect(0);
+    bim(&[&"apply", &two, &s.write("2.ops", "set a h num 2\ncreate b Wall\nset b p ref a\n")]).expect(0);
+    bim(&[&"apply", &one, &s.write("3.ops", "create a Wall\nset a h num 1\nset a h num 2\ncreate b Wall\nset b p ref a\n")]).expect(0);
     assert_eq!(hash(&two), hash(&one));
     assert_eq!(bim(&[&"diff", &two, &one]).expect(0).out, "same\n");
     // Later files see the earlier ones' entities.
@@ -643,11 +643,11 @@ fn apply_appends_and_keeps_the_existing_journal_bytes() {
 fn ops_in_one_file_see_each_other() {
     let s = Scratch::new();
     let dir = s.project("p", "");
-    let file = s.write("chain.ops", "create a W\nset a h num 1\ndelete a\ncreate a Slab\nset a t num 2\n");
+    let file = s.write("chain.ops", "create a Wall\nset a h num 1\ndelete a\ncreate a Slab\nset a t num 2\n");
     bim(&[&"apply", &dir, &file]).expect(0);
     let mut doc = Document::new();
     let a = EntityId::derive("a");
-    create(&mut doc, "a", "W");
+    create(&mut doc, "a", "Wall");
     doc.apply(Op::Set { id: a, key: "h".into(), value: Value::Num(1.0) }).unwrap();
     doc.apply(Op::Delete { id: a }).unwrap();
     create(&mut doc, "a", "Slab");
@@ -659,13 +659,13 @@ fn ops_in_one_file_see_each_other() {
 fn numbers_survive_the_journal_bit_for_bit() {
     let s = Scratch::new();
     let words = ["0.30000000000000004", "1e300", "5e-324", "-0", "9", "3.5", "1.7976931348623157e308", "2.2250738585072014e-308", "1e21", "1e-7", "123456789012345680"];
-    let ops: String = std::iter::once("create e W\n".to_string())
+    let ops: String = std::iter::once("create e Wall\n".to_string())
         .chain(words.iter().enumerate().map(|(i, w)| format!("set e k{i} num {w}\n")))
         .collect();
     let dir = s.project("p", &ops);
     let mut doc = Document::new();
     let e = EntityId::derive("e");
-    create(&mut doc, "e", "W");
+    create(&mut doc, "e", "Wall");
     for (i, w) in words.iter().enumerate() {
         let x: f64 = w.parse().unwrap();
         doc.apply(Op::Set { id: e, key: format!("k{i}"), value: Value::Num(x) }).unwrap();
@@ -730,6 +730,282 @@ fn a_corrupt_journal_exits_2_names_its_line_and_is_never_modified() {
     assert!(bim(&[&"hash", &dir]).rejected().err.contains("UTF-8"));
 }
 
+// ---- kind registry and trade packages -----------------------------------------------------
+
+/// spec/schema.md's kinds table, sorted: what `bim plugin list` reports as `core_kinds`.
+const CORE_KINDS: [&str; 34] = [
+    "AreaLoad", "Beam", "Circuit", "Column", "ComponentDefinition", "ComponentInstance", "ConflictDiagnostic",
+    "Constraint", "CurtainWall", "Dimension", "Furniture", "Guide", "Issue", "Level", "LoadCombination", "Material",
+    "MepSystem", "Opening", "Point", "PointLoad", "Port", "Product", "Ramp", "Roof", "Scene", "Segment", "Shape", "Slab",
+    "SlabOpening", "Space", "Stair", "Support", "Wall", "WallType",
+];
+
+const FIRE: &str = r#"{"package": "fire", "version": "0.1.0", "abi": "openbim:trade@0.1.0", "kinds": {
+    "fire:Sprinkler": {"props": {"level": "ref", "x": "num", "y": "num", "z": "num", "coverage_radius": "num"},
+                       "geometry": {"box": {"centre": ["x", "y", "z"], "size": [0.1, 0.1, 0.1]}}},
+    "fire:Zone": {"props": {"name": "text", "active": "bool", "rooms": "list"}}},
+    "engine": "fire.wasm"}"#;
+
+const ACOUSTIC: &str = r#"{"package": "acoustic", "version": "2.1.0", "abi": "openbim:trade@0.1.0",
+    "kinds": {"acoustic:Panel": {"props": {"nrc": "num"}}, "acoustic:Baffle": {}}}"#;
+
+/// Installs `text` as `<dir>/plugins/<package>/trade.json`.
+fn install(dir: &Path, package: &str, text: &str) {
+    let package_dir = dir.join("plugins").join(package);
+    fs::create_dir_all(&package_dir).unwrap();
+    fs::write(package_dir.join("trade.json"), text).unwrap();
+}
+
+fn core_kinds_json() -> String {
+    format!("[\"{}\"]", CORE_KINDS.join("\",\""))
+}
+
+#[test]
+fn every_core_kind_can_be_created_with_any_props_but_other_kinds_cannot() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    let ops: String = CORE_KINDS.iter().enumerate().map(|(i, kind)| format!("create k{i} {kind}\nset k{i} anything text goes\n")).collect();
+    bim(&[&"apply", &dir, &s.write("core.ops", ops)]).expect(0);
+    assert_eq!(show(&dir, "k0"), r#"{"id":"k0","kind":"AreaLoad","props":{"_name":"k0","_schema":1.0,"anything":"goes"}}"#);
+    let before = (journal(&dir), hash(&dir));
+    let cases = [
+        ("line format", "bad.ops", "create ok Level\ncreate b Bogus\n", "bad.ops:2: unknown kind `Bogus`"),
+        ("a lower-case core name", "bad.ops", "create b wall\n", "bad.ops:1: unknown kind `wall`"),
+        ("a trailing space is part of the name", "bad.ops", "{\"op\":\"create\",\"id\":\"b\",\"kind\":\"Wall \"}\n", "unknown kind `Wall `"),
+        ("an extension kind whose package is not installed", "bad.ops", "create b fire:Sprinkler\n", "unknown kind `fire:Sprinkler`"),
+        (
+            "JSON ops, with props",
+            "bad.json",
+            r#"{"schema": 1, "ops": [{"op": "create", "id": "ok", "kind": "Level"}, {"op": "create", "id": "b", "kind": "Bogus", "props": {"x": 1}}]}"#,
+            "bad.json: ops[1]: unknown kind `Bogus`",
+        ),
+    ];
+    for (what, name, text, message) in cases {
+        let run = bim(&[&"apply", &dir, &s.write(name, text)]).rejected();
+        assert!(run.err.contains(message), "{what}: {}", run.err);
+        assert_eq!((journal(&dir), hash(&dir)), before, "{what}");
+        bim(&[&"show", &dir, &"b", &"--json"]).rejected();
+        bim(&[&"show", &dir, &"ok", &"--json"]).rejected();
+    }
+}
+
+#[test]
+fn extension_kinds_and_props_are_checked_by_apply() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let h_core = hash(&dir);
+    install(&dir, "fire", FIRE);
+    install(&dir, "acoustic", ACOUSTIC);
+    assert_eq!(hash(&dir), h_core, "installing a package changes no entity");
+
+    let ok = s.write(
+        "ok.json",
+        r#"{"schema": 1, "ops": [
+            {"op": "create", "id": "S1", "kind": "fire:Sprinkler", "props": {"level": {"ref": "lvl"}, "x": 1.5, "coverage_radius": 2.5}},
+            {"op": "create", "id": "Z1", "kind": "fire:Zone", "props": {"name": "north", "active": true, "rooms": [{"ref": "lvl"}, 1, []]}},
+            {"op": "set", "id": "Z1", "key": "rooms", "value": []},
+            {"op": "create", "id": "AP", "kind": "acoustic:Panel", "props": {"nrc": 0.85}},
+            {"op": "create", "id": "AB", "kind": "acoustic:Baffle"},
+            {"op": "delete", "id": "AB"}]}"#,
+    );
+    bim(&[&"apply", &dir, &ok]).expect(0);
+    bim(&[&"apply", &dir, &s.write("ok.ops", "create S2 fire:Sprinkler\nset S2 x num 3\nset S2 level ref lvl\nset Z1 name text south\n")]).expect(0);
+    assert_eq!(
+        show(&dir, "S1"),
+        r#"{"id":"S1","kind":"fire:Sprinkler","props":{"_name":"S1","_schema":1.0,"coverage_radius":2.5,"level":{"ref":"lvl"},"x":1.5}}"#
+    );
+    bim(&[&"show", &dir, &"AB", &"--json"]).rejected();
+    // Core kinds stay unchecked next to packages.
+    bim(&[&"apply", &dir, &s.write("core.ops", "set wall height text tall\nset wall host num 1\ncreate k Shape\nset k colour text red\n")]).expect(0);
+    bim(&[&"validate", &dir]).expect(0);
+
+    let before = (journal(&dir), hash(&dir));
+    let bad = [
+        ("a kind the package does not declare", "create H fire:Hose\n", "bad.ops:1: unknown kind `fire:Hose`"),
+        ("a kind of another package's namespace", "create H acoustic:Sprinkler\n", "unknown kind `acoustic:Sprinkler`"),
+        ("a num given as text", "create H fire:Sprinkler\nset H x text 1.5\n", "bad.ops:2: prop `x` of `fire:Sprinkler` must be num, got text"),
+        ("a num given as a ref", "set S1 z ref lvl\n", "bad.ops:1: prop `z` of `fire:Sprinkler` must be num, got ref"),
+        ("a ref given as text", "set S1 level text lvl\n", "must be ref, got text"),
+        ("a text given as a num", "set Z1 name num 4\n", "prop `name` of `fire:Zone` must be text, got num"),
+        ("an undeclared prop", "set S1 colour text red\n", "bad.ops:1: kind `fire:Sprinkler` declares no prop `colour`"),
+        ("a prop of another kind", "create H fire:Zone\nset H x num 1\n", "kind `fire:Zone` declares no prop `x`"),
+        ("a valid create then an invalid set", "create H fire:Sprinkler\nset H x num 1\nset H y text a\n", "bad.ops:3: prop `y`"),
+        ("a valid set then an invalid set", "set S1 x num 9\nset S1 y text north\n", "bad.ops:2:"),
+        ("a reserved key on an extension entity", "set S1 _name text evil\n", "reserved"),
+        ("an unknown entity is still reported as such", "set ghost x text 1\n", "bad.ops:1: entity `ghost` not found"),
+    ];
+    for (what, text, message) in bad {
+        let run = bim(&[&"apply", &dir, &s.write("bad.ops", text)]).rejected();
+        assert!(run.err.contains(message), "{what}: {}", run.err);
+        assert_eq!((journal(&dir), hash(&dir)), before, "{what}");
+    }
+    let wrong = |what: &str, ops: &str, message: &str| {
+        let run = bim(&[&"apply", &dir, &s.write("bad.json", format!(r#"{{"schema": 1, "ops": [{ops}]}}"#))]).rejected();
+        assert!(run.err.contains(message), "{what}: {}", run.err);
+        assert_eq!((journal(&dir), hash(&dir)), before, "{what}");
+    };
+    wrong("a num prop given as text", r#"{"op": "create", "id": "H", "kind": "fire:Sprinkler", "props": {"x": "1.5"}}"#, "bad.json: ops[0]: prop `x` of `fire:Sprinkler` must be num, got text");
+    wrong("a num prop given as a bool", r#"{"op": "create", "id": "H", "kind": "fire:Sprinkler", "props": {"z": true}}"#, "must be num, got bool");
+    wrong("a num prop given as a list", r#"{"op": "create", "id": "H", "kind": "fire:Sprinkler", "props": {"coverage_radius": [2.5]}}"#, "must be num, got list");
+    wrong("a text prop given as a number", r#"{"op": "create", "id": "H", "kind": "fire:Zone", "props": {"name": 3}}"#, "prop `name` of `fire:Zone` must be text, got num");
+    wrong("a bool prop given as text", r#"{"op": "create", "id": "H", "kind": "fire:Zone", "props": {"active": "true"}}"#, "must be bool, got text");
+    wrong("a list prop given as a ref", r#"{"op": "set", "id": "Z1", "key": "rooms", "value": {"ref": "lvl"}}"#, "must be list, got ref");
+    wrong("an undeclared prop at create", r#"{"op": "create", "id": "H", "kind": "fire:Sprinkler", "props": {"x": 1, "colour": "red"}}"#, "declares no prop `colour`");
+    wrong(
+        "a valid create and set before an invalid set",
+        r#"{"op": "create", "id": "H", "kind": "fire:Sprinkler", "props": {"x": 1}}, {"op": "set", "id": "S1", "key": "x", "value": 9}, {"op": "set", "id": "S1", "key": "y", "value": "north"}"#,
+        "bad.json: ops[2]: prop `y` of `fire:Sprinkler` must be num, got text",
+    );
+    wrong("a reserved prop at create", r#"{"op": "create", "id": "H", "kind": "fire:Zone", "props": {"_schema": 2}}"#, "reserved");
+    bim(&[&"show", &dir, &"H", &"--json"]).rejected();
+    assert!(show(&dir, "S1").contains(r#""x":1.5"#), "a rejected file changed nothing");
+}
+
+#[test]
+fn an_entity_is_checked_against_the_kind_it_has_when_the_op_is_reached() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    install(&dir, "fire", FIRE);
+    // The id is reused: a core entity, deleted, comes back as an extension entity, and the sets that
+    // follow are checked against the new kind.
+    let ok = "create a Wall\nset a x text north\ndelete a\ncreate a fire:Sprinkler\nset a x num 1\n";
+    bim(&[&"apply", &dir, &s.write("ok.ops", ok)]).expect(0);
+    assert!(show(&dir, "a").contains(r#""kind":"fire:Sprinkler""#));
+    let run = bim(&[&"apply", &dir, &s.write("bad.ops", "delete a\ncreate a fire:Sprinkler\nset a x text north\n")]).rejected();
+    assert!(run.err.contains("bad.ops:3: prop `x` of `fire:Sprinkler` must be num, got text"), "{}", run.err);
+    // And the other way round: once it is a core entity again, nothing is checked.
+    let run = bim(&[&"apply", &dir, &s.write("again.ops", "delete a\ncreate a Wall\nset a x text north\nset a y text fine\n")]).expect(0);
+    assert_eq!(run.out, "");
+    assert!(show(&dir, "a").contains(r#""kind":"Wall""#));
+}
+
+#[test]
+fn removing_a_package_leaves_the_project_readable() {
+    let s = Scratch::new();
+    let dir = s.project("p", "create L1 Level\n");
+    install(&dir, "fire", FIRE);
+    bim(&[&"apply", &dir, &s.write("e.ops", "create S1 fire:Sprinkler\nset S1 x num 1\nset S1 level ref L1\n")]).expect(0);
+    let h = hash(&dir);
+    fs::remove_dir_all(dir.join("plugins")).unwrap();
+    // The journal is replayed without kind checks: nothing is lost with the package.
+    assert_eq!(hash(&dir), h);
+    bim(&[&"validate", &dir]).expect(0);
+    assert!(show(&dir, "S1").contains(r#""kind":"fire:Sprinkler""#));
+    // New creates need a declared kind; sets on the orphaned entity have nothing to be checked against.
+    bim(&[&"apply", &dir, &s.write("new.ops", "create S2 fire:Sprinkler\n")]).rejected();
+    bim(&[&"apply", &dir, &s.write("more.ops", "set S1 x text anything\nset S1 colour text red\n")]).expect(0);
+    // A journal that was never written through `bim apply` is replayed as it is.
+    let copy = s.project("q", "");
+    fs::write(copy.join("doc.oplog"), "create a Bogus\nset a h num 1\n").unwrap();
+    assert_eq!(hash(&copy).len(), 16);
+    bim(&[&"validate", &copy]).expect(0);
+    assert!(show(&copy, "a").contains(r#""kind":"Bogus""#));
+}
+
+#[test]
+fn a_malformed_or_inconsistent_package_makes_every_command_exit_2_naming_its_file() {
+    let s = Scratch::new();
+    let good = s.project("good", A_OPS);
+    let mep = FIRE.replace("fire", "mep");
+    // (defect, package directory, its trade.json; `None`: the directory has none)
+    let cases = [
+        ("malformed JSON", "fire", Some("{\"package\": \"fire\", \"kinds\": {".to_string())),
+        ("a directory that is not the package name", "fire2", Some(FIRE.to_string())),
+        ("a built-in trade", "mep", Some(mep)),
+        ("a wrong abi", "fire", Some(FIRE.replace("trade@0.1.0", "trade@0.2.0"))),
+        ("an unknown prop type", "fire", Some(FIRE.replace(r#""coverage_radius": "num""#, r#""coverage_radius": "float""#))),
+        ("an unknown geometry template", "fire", Some(FIRE.replace(r#""box""#, r#""sphere""#))),
+        ("a geometry entry that names no prop", "fire", Some(FIRE.replace(r#"["x", "y", "z"]"#, r#"["x", "y", "w"]"#))),
+        ("a kind outside the namespace", "fire", Some(FIRE.replace(r#""fire:Zone""#, r#""acoustic:Zone""#))),
+        ("a kind without a namespace", "fire", Some(FIRE.replace(r#""fire:Zone""#, r#""Zone""#))),
+        ("a package directory without a trade.json", "fire", None),
+    ];
+    for (what, package, text) in cases {
+        let dir = s.project("broken", A_OPS);
+        install(&dir, "acoustic", ACOUSTIC); // a valid package does not hide the broken one
+        match text {
+            Some(text) => install(&dir, package, &text),
+            None => fs::create_dir_all(dir.join("plugins").join(package)).unwrap(),
+        }
+        let file = format!("{package}/trade.json");
+        let ops = s.write("fine.ops", "create extra Wall\n");
+        let before = journal(&dir);
+        let commands: [Vec<&dyn AsRef<OsStr>>; 7] = [
+            vec![&"hash", &dir],
+            vec![&"apply", &dir, &ops],
+            vec![&"show", &dir, &"wall", &"--json"],
+            vec![&"validate", &dir],
+            vec![&"diff", &dir, &good],
+            vec![&"diff", &good, &dir],
+            vec![&"plugin", &"list", &dir, &"--json"],
+        ];
+        for args in commands {
+            let run = bim(&args).rejected();
+            assert!(run.err.contains(&file), "{what}: stderr does not name {file}: {}", run.err);
+        }
+        assert_eq!(journal(&dir), before, "{what}");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+}
+
+#[test]
+fn stray_files_and_dot_directories_in_plugins_are_not_packages() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let plugins = dir.join("plugins");
+    fs::create_dir_all(plugins.join(".git")).unwrap();
+    fs::write(plugins.join("README.md"), "notes").unwrap();
+    let run = bim(&[&"plugin", &"list", &dir, &"--json"]).expect(0);
+    assert_eq!(run.out, format!("{{\"packages\":[],\"core_kinds\":{}}}\n", core_kinds_json()));
+    bim(&[&"hash", &dir]).expect(0);
+}
+
+#[test]
+fn plugins_that_is_not_a_directory_exits_2() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    fs::write(dir.join("plugins"), "x").unwrap();
+    let run = bim(&[&"hash", &dir]).rejected();
+    assert!(run.err.contains("plugins: not a directory"), "{}", run.err);
+}
+
+#[test]
+fn plugin_list_reports_the_packages_and_the_core_kinds() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let empty = format!("{{\"packages\":[],\"core_kinds\":{}}}\n", core_kinds_json());
+    let run = bim(&[&"plugin", &"list", &dir, &"--json"]).expect(0);
+    assert_eq!((run.out.as_str(), run.err.as_str()), (empty.as_str(), ""));
+
+    install(&dir, "fire", FIRE);
+    install(&dir, "acoustic", ACOUSTIC);
+    let want = format!(
+        concat!(
+            r#"{{"packages":[{{"name":"acoustic","version":"2.1.0","abi":"openbim:trade@0.1.0","kinds":["acoustic:Baffle","acoustic:Panel"],"engine":null}},"#,
+            r#"{{"name":"fire","version":"0.1.0","abi":"openbim:trade@0.1.0","kinds":["fire:Sprinkler","fire:Zone"],"engine":"plugins/fire/fire.wasm"}}],"#,
+            r#""core_kinds":{}}}"#,
+            "\n"
+        ),
+        core_kinds_json()
+    );
+    for args in [
+        vec![&"plugin" as &dyn AsRef<OsStr>, &"list", &dir, &"--json"],
+        vec![&"plugin", &"--json", &"list", &dir],
+        vec![&"plugin", &"list", &dir],
+    ] {
+        let run = bim(&args).expect(0);
+        assert_eq!((run.out.as_str(), run.err.as_str()), (want.as_str(), ""));
+    }
+    // `plugin list` reads only the directory and its plugins: no journal is needed.
+    let bare = s.path("bare");
+    fs::create_dir(&bare).unwrap();
+    install(&bare, "acoustic", ACOUSTIC);
+    assert!(bim(&[&"plugin", &"list", &bare, &"--json"]).expect(0).out.contains(r#""name":"acoustic""#));
+    bim(&[&"plugin", &"list", &s.path("missing"), &"--json"]).rejected();
+    let file = s.write("file", "x");
+    bim(&[&"plugin", &"list", &file, &"--json"]).rejected();
+}
+
 // ---- command line -------------------------------------------------------------------------
 
 #[test]
@@ -754,6 +1030,11 @@ fn usage_errors_exit_2() {
         vec![&"diff"],
         vec![&"diff", &dir],
         vec![&"diff", &dir, &dir, &dir],
+        vec![&"plugin"],
+        vec![&"plugin", &"list"],
+        vec![&"plugin", &"list", &dir, &dir],
+        vec![&"plugin", &"remove", &dir],
+        vec![&"plugin", &"--json"],
     ];
     for args in cases {
         let run = bim(&args).rejected();

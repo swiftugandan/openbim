@@ -68,7 +68,8 @@ pub enum LineOp {
     Create {
         /// Name of the new entity.
         seed: String,
-        /// Its kind (kinds are not validated yet).
+        /// Its kind. `bim apply` checks it against the project's kind registry; parsing and replaying
+        /// the journal do not.
         kind: String,
     },
     /// `set <seed> <key> <type> <value>`
