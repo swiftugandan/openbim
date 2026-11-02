@@ -1,0 +1,13 @@
+[package]
+name = "bim-sync"
+description = "State-based delta sync of the CRDT op log over WebSocket"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-crdt = { path = "../bim-crdt" }
+rusqlite = { version = "=0.32.1", features = ["bundled"] }
+tungstenite = { version = "=0.24.0", default-features = false, features = ["handshake"] }
