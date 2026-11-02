@@ -1,0 +1,10 @@
+[package]
+name = "bim-schema"
+description = "Kind registry: the core entity kinds and the extension kinds declared by trade packages"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }

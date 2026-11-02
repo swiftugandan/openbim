@@ -7,6 +7,7 @@ name = "bim-cli"
 version = "0.1.0"
 dependencies = [
  "bim-doc",
+ "bim-schema",
 ]
 
 [[package]]
@@ -23,6 +24,13 @@ version = "0.1.0"
 [[package]]
 name = "bim-geom"
 version = "0.1.0"
+
+[[package]]
+name = "bim-schema"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+]
 
 [[package]]
 name = "bim-solver"
