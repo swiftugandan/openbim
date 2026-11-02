@@ -2,7 +2,7 @@
 
 The full build plan for openbim: a deterministic, document-first, local-first BIM and
 spatial-engineering platform in Rust (native CLI + WebAssembly) with a web Studio.
-`loop/run.sh` works the first `[ ]` task. Marks: `[ ]` todo, `[x]` done, `[!]` blocked (with a `Blocked:` bullet).
+`loop/run.sh` works every `[ ]` task whose `Opens:` are all `[x]`. Marks: `[ ]` todo, `[x]` done, `[!]` blocked (with a `Blocked:` bullet).
 
 Fields per task:
 - `Files:` the only paths the task may change. `Opens:` tasks whose output must exist (a `[!]` there blocks this task).

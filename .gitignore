@@ -4,7 +4,7 @@ target/
 judges/**/Cargo.lock
 .DS_Store
 node_modules/
-.oracles/
+.oracles
 corpus/
 packages/bim-wasm/pkg-*/
 apps/studio/dist/

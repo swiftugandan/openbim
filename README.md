@@ -22,17 +22,26 @@ being built task by task. See `TASKS.md` for progress (`[x]` done, `[ ]` to do, 
 
 ## How it is built
 
-`loop/run.sh` works through `TASKS.md` one task per fresh Claude Code session:
-SCOUT → (PLAN) → BUILD → CHECK → AUDIT → COMMIT. Every task's Verification is an external judge in `judges/`,
-written before any building, and most judges compare against independent open oracles (ifcopenshell,
-manifold3d, PyNite, WNTR, python-solvespace, the Khronos glTF validator, the MCP SDK, axe-core and others).
-The loop's gate reruns each judge and every earlier one; a session never grades itself.
+`loop/run.sh` works through `TASKS.md`, starting a fresh Claude Code session for each task whose dependencies are done:
+SCOUT → (PLAN) → BUILD → CHECK → AUDIT, then a gate on this machine, then a PR that lands on `main`. Every task's
+Verification is an external judge in `judges/`, written before any building, and most judges compare against
+independent open oracles (ifcopenshell, manifold3d, PyNite, WNTR, python-solvespace, the Khronos glTF validator,
+the MCP SDK, axe-core and others). The gate reruns each judge and every earlier one; a session never grades itself.
+
+Sessions run in parallel as cloud sessions, except the tasks in `LOCAL_TASKS` (GPU and frame-time gates, the Chrome-driven
+UI judges, the IFC corpus), which run here one at a time.
 
 ```
-bash loop/setup.sh   # install the oracles into .oracles/
-bash loop/run.sh     # run the loop
-bash loop/watch.sh   # dashboard, in a second terminal
+bash loop/setup.sh       # install the oracles into .oracles/
+bash loop/test-run.sh    # check the loop itself, using stubs
+bash loop/run.sh         # run the loop from a clean, pushed main (PARALLEL=4, RUNNER=local to stay on this machine)
+bash loop/watch.sh       # dashboard for local sessions, in a second terminal; .loop/events.log covers cloud ones
 ```
+
+Cloud sessions need the Claude GitHub App on this repo and a cloud environment used only for this project (`CLOUD_ENV`,
+named `openbim-build`) with full network access, `BASH_DEFAULT_TIMEOUT_MS=900000`, `BASH_MAX_TIMEOUT_MS=900000` and
+`loop/cloud-env-setup.sh` as its setup script.
+`touch .loop/stop` stops new sessions and lets running ones finish.
 
 Contracts live in `spec/` (schema, CLI, MCP, plugins, web).
 
