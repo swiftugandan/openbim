@@ -36,78 +36,112 @@ pub(crate) enum SolveError {
 /// Solves `A x = b` for a symmetric positive-definite `A`, given row-major as an
 /// `n × n` vector (only the lower triangle is read).
 ///
-/// The matrix is first Jacobi-scaled to unit diagonal (`S A S`,
-/// `S = diag(1/sqrt(a_kk))`), which makes the singularity test independent of
-/// the units of each unknown (a rotation and a translation, kN and N, m and mm
-/// all behave alike), then factorised as `L Lᵀ` with a pivot test against
-/// [`PIVOT_TOL`]; a NaN pivot is rejected like a small one.
+/// Equivalent to [`Cholesky::factor`] followed by one [`Cholesky::solve`]; see
+/// there for the scaling and the singularity test.
 ///
 /// # Panics
 ///
 /// If `a.len() != n * n` or `b.len() != n` (a programming error).
-pub(crate) fn solve_spd(mut a: Vec<f64>, n: usize, b: &[f64]) -> Result<Vec<f64>, SolveError> {
-    assert_eq!(a.len(), n * n, "matrix must be n x n");
+pub(crate) fn solve_spd(a: Vec<f64>, n: usize, b: &[f64]) -> Result<Vec<f64>, SolveError> {
     assert_eq!(b.len(), n, "right-hand side must have n entries");
-    if n == 0 {
-        return Ok(Vec::new());
+    Cholesky::factor(a, n)?.solve(b)
+}
+
+/// A Jacobi-scaled Cholesky factorisation `S A S = L Lᵀ` that can be reused for
+/// any number of right-hand sides.
+#[derive(Debug, Clone)]
+pub(crate) struct Cholesky {
+    n: usize,
+    /// `L` in the lower triangle, row-major `n × n`.
+    l: Vec<f64>,
+    /// `S = diag(1 / sqrt(a_kk))`.
+    scale: Vec<f64>,
+}
+
+impl Cholesky {
+    /// Factorises a symmetric positive-definite `A`, given row-major as an `n × n`
+    /// vector (only the lower triangle is read).
+    ///
+    /// The matrix is first Jacobi-scaled to unit diagonal (`S A S`,
+    /// `S = diag(1/sqrt(a_kk))`), which makes the singularity test independent of
+    /// the units of each unknown (a rotation and a translation, kN and N, m and mm
+    /// all behave alike), then factorised as `L Lᵀ` with a pivot test against
+    /// [`PIVOT_TOL`]; a NaN pivot is rejected like a small one.
+    ///
+    /// # Panics
+    ///
+    /// If `a.len() != n * n` (a programming error).
+    pub(crate) fn factor(mut a: Vec<f64>, n: usize) -> Result<Self, SolveError> {
+        assert_eq!(a.len(), n * n, "matrix must be n x n");
+
+        // Jacobi scaling. The diagonal is checked before it is used as a divisor.
+        let mut scale = Vec::with_capacity(n);
+        for k in 0..n {
+            let d = a[k * n + k];
+            if !d.is_finite() || d <= 0.0 {
+                return Err(SolveError::NoStiffness { index: k });
+            }
+            scale.push(1.0 / d.sqrt());
+        }
+        for (i, row) in a.chunks_exact_mut(n.max(1)).enumerate().take(n) {
+            for (j, v) in row[..=i].iter_mut().enumerate() {
+                *v *= scale[i] * scale[j];
+            }
+        }
+
+        // Cholesky A = L Lᵀ, one row at a time, L overwriting the lower triangle.
+        for i in 0..n {
+            let (done, rest) = a.split_at_mut(i * n);
+            let row_i = &mut rest[..n];
+            for j in 0..i {
+                let row_j = &done[j * n..(j + 1) * n];
+                let dot: f64 = row_i[..j].iter().zip(&row_j[..j]).map(|(x, y)| x * y).sum();
+                row_i[j] = (row_i[j] - dot) / row_j[j];
+            }
+            let dot: f64 = row_i[..i].iter().map(|x| x * x).sum();
+            let pivot = row_i[i] - dot;
+            // A NaN pivot must fail too, which `pivot <= PIVOT_TOL` alone would let through.
+            if pivot.is_nan() || pivot <= PIVOT_TOL {
+                return Err(SolveError::Singular { index: i, pivot });
+            }
+            row_i[i] = pivot.sqrt();
+        }
+        Ok(Self { n, l: a, scale })
     }
 
-    // Jacobi scaling. The diagonal is checked before it is used as a divisor.
-    let mut scale = Vec::with_capacity(n);
-    for k in 0..n {
-        let d = a[k * n + k];
-        if !d.is_finite() || d <= 0.0 {
-            return Err(SolveError::NoStiffness { index: k });
-        }
-        scale.push(1.0 / d.sqrt());
-    }
-    for (i, row) in a.chunks_exact_mut(n).enumerate() {
-        for (j, v) in row[..=i].iter_mut().enumerate() {
-            *v *= scale[i] * scale[j];
-        }
-    }
+    /// Solves `A x = b` with the stored factorisation.
+    ///
+    /// # Panics
+    ///
+    /// If `b.len()` differs from the factorised size (a programming error).
+    pub(crate) fn solve(&self, b: &[f64]) -> Result<Vec<f64>, SolveError> {
+        let (n, a, scale) = (self.n, &self.l, &self.scale);
+        assert_eq!(b.len(), n, "right-hand side must have n entries");
 
-    // Cholesky A = L Lᵀ, one row at a time, L overwriting the lower triangle.
-    for i in 0..n {
-        let (done, rest) = a.split_at_mut(i * n);
-        let row_i = &mut rest[..n];
-        for j in 0..i {
-            let row_j = &done[j * n..(j + 1) * n];
-            let dot: f64 = row_i[..j].iter().zip(&row_j[..j]).map(|(x, y)| x * y).sum();
-            row_i[j] = (row_i[j] - dot) / row_j[j];
+        // (S A S) y = S b by forward and back substitution, then x = S y.
+        let mut x: Vec<f64> = b.iter().zip(scale).map(|(bi, s)| bi * s).collect();
+        for i in 0..n {
+            let row = &a[i * n..(i + 1) * n];
+            let dot: f64 = row[..i].iter().zip(&x[..i]).map(|(l, xm)| l * xm).sum();
+            x[i] = (x[i] - dot) / row[i];
         }
-        let dot: f64 = row_i[..i].iter().map(|x| x * x).sum();
-        let pivot = row_i[i] - dot;
-        // A NaN pivot must fail too, which `pivot <= PIVOT_TOL` alone would let through.
-        if pivot.is_nan() || pivot <= PIVOT_TOL {
-            return Err(SolveError::Singular { index: i, pivot });
+        for i in (0..n).rev() {
+            let row = &a[i * n..(i + 1) * n];
+            x[i] /= row[i];
+            let xi = x[i];
+            for (xm, l) in x[..i].iter_mut().zip(&row[..i]) {
+                *xm -= l * xi;
+            }
         }
-        row_i[i] = pivot.sqrt();
-    }
+        for (xi, s) in x.iter_mut().zip(scale) {
+            *xi *= s;
+        }
 
-    // (S A S) y = S b by forward and back substitution, then x = S y.
-    let mut x: Vec<f64> = b.iter().zip(&scale).map(|(bi, s)| bi * s).collect();
-    for i in 0..n {
-        let row = &a[i * n..(i + 1) * n];
-        let dot: f64 = row[..i].iter().zip(&x[..i]).map(|(l, xm)| l * xm).sum();
-        x[i] = (x[i] - dot) / row[i];
-    }
-    for i in (0..n).rev() {
-        let row = &a[i * n..(i + 1) * n];
-        x[i] /= row[i];
-        let xi = x[i];
-        for (xm, l) in x[..i].iter_mut().zip(&row[..i]) {
-            *xm -= l * xi;
+        if x.iter().all(|v| v.is_finite()) {
+            Ok(x)
+        } else {
+            Err(SolveError::NonFinite)
         }
-    }
-    for (xi, s) in x.iter_mut().zip(&scale) {
-        *xi *= s;
-    }
-
-    if x.iter().all(|v| v.is_finite()) {
-        Ok(x)
-    } else {
-        Err(SolveError::NonFinite)
     }
 }
 
