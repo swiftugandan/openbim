@@ -113,7 +113,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M2 Geometry kernel
 
-- [ ] T2.1: bim-geom: exact predicates, polygons, half-edge B-Rep, extrusions and sweeps
+- [x] T2.1: bim-geom: exact predicates, polygons, half-edge B-Rep, extrusions and sweeps
   - Files: Cargo.toml, Cargo.lock, crates/bim-geom/
   - Opens: T1.1
   - Needs: .oracles/py/bin/python
