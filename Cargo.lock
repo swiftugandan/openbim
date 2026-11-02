@@ -22,5 +22,9 @@ name = "bim-solver"
 version = "0.1.0"
 
 [[package]]
+name = "bim-spatial"
+version = "0.1.0"
+
+[[package]]
 name = "bim-struct"
 version = "0.1.0"

@@ -1,0 +1,9 @@
+[package]
+name = "bim-spatial"
+description = "Spatial indexing: R*-tree (forced reinsert, STR bulk load, k-nearest) and SAH BVH over triangles (raycasting, overlap pairs)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
