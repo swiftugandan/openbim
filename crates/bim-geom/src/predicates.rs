@@ -250,6 +250,45 @@ impl Expansion {
         }
         acc
     }
+
+    /// The same value with the fewest components (Shewchuk's `compress`): the components are
+    /// re-accumulated top-down and bottom-up so that each one carries as many bits as it can.
+    /// Keeps the exact arithmetic of long product chains from growing linearly in length.
+    pub(crate) fn compress(&self) -> Expansion {
+        let e = &self.0;
+        if e.len() < 2 {
+            return self.clone();
+        }
+        let mut h = vec![0.0; e.len()];
+        let mut bottom = e.len() - 1;
+        let mut q = e[bottom];
+        for &enow in e[..e.len() - 1].iter().rev() {
+            let (qn, qq) = fast_two_sum(q, enow);
+            if qq != 0.0 {
+                h[bottom] = qn;
+                bottom -= 1;
+                q = qq;
+            } else {
+                q = qn;
+            }
+        }
+        let mut top = 0;
+        for i in bottom + 1..e.len() {
+            let hnow = h[i];
+            let (qn, qq) = fast_two_sum(hnow, q);
+            if qq != 0.0 {
+                h[top] = qq;
+                top += 1;
+            }
+            q = qn;
+        }
+        if q != 0.0 {
+            h[top] = q;
+            top += 1;
+        }
+        h.truncate(top);
+        Expansion(h)
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
