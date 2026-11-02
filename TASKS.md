@@ -75,7 +75,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.3.sh
   - Spec: Crate `bim-solver`. `Sketch::new()`, `add_point(x, y) -> PointId`, `add(c: Constraint)`; `Constraint` variants: `Fix(PointId, f64, f64)`, `Coincident(PointId, PointId)`, `Distance(PointId, PointId, f64)`, `Horizontal(PointId, PointId)`, `Vertical(PointId, PointId)`, `Parallel(PointId, PointId, PointId, PointId)`, `Perpendicular(PointId, PointId, PointId, PointId)`, `Angle(PointId, PointId, PointId, PointId, f64)` (radians, line a→b to line c→d). `solve(&mut self) -> SolveReport` uses Newton or Levenberg–Marquardt with analytic Jacobians. `SolveReport { status: Status, residual: f64, dof: usize }` with `Status::{WellConstrained, UnderConstrained, OverConstrained, Inconsistent}`: dof = 2·points − rank(J); redundant-but-consistent equations give OverConstrained; unsatisfiable ones give Inconsistent. `point(id) -> (f64, f64)`. `PointId` and `Constraint` derive Debug, Clone, Copy; `Status` derives Debug, PartialEq. Angle is the signed counter-clockwise angle from direction a→b to direction c→d. `residual` is the Euclidean norm of the equation residual vector; rank uses a relative singular-value tolerance of 1e-9. Status priority: Inconsistent (residual > 1e-6 after solving), then UnderConstrained (dof > 0), then OverConstrained (more scalar equations than rank), else WellConstrained.
 
-- [ ] T1.4: bim-struct: 2D frame direct-stiffness solver
+- [x] T1.4: bim-struct: 2D frame direct-stiffness solver
   - Files: Cargo.lock, crates/engines/structural/
   - Opens: T1.1
   - Builder: sonnet
