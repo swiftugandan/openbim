@@ -40,7 +40,7 @@ bcf_schemas() {
 
 rust_tools() {
   echo "== Rust: the toolchain and wasm targets pinned in rust-toolchain.toml, and wasm-pack"
-  rustup toolchain install
+  rustup toolchain install --no-self-update
   touch "$P/rust-wasip2"
   command -v wasm-pack >/dev/null && return 0
   if [ "$(uname -s)" = Linux ]; then
