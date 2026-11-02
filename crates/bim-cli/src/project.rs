@@ -16,6 +16,12 @@
 //! written to a temporary file in the same directory, synced, and renamed over `doc.oplog`. A
 //! failure or a crash therefore leaves either the old journal or the new one, never a torn line.
 //! The project has a single writer: two `bim apply` runs racing on one project can lose one run's ops.
+//!
+//! **The kind registry** (`bim-schema`) is read from `<dir>/plugins/*/trade.json` every time a project
+//! is opened, so every command that opens one fails (exit 2, naming the file) on a malformed or
+//! inconsistent trade package. The registry is not part of the document and is not applied to the
+//! journal on replay: only `bim apply` checks the ops it is given, so a project whose package was
+//! removed still opens and its entities stay readable.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -24,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use bim_doc::{Document, EntityId, Value};
+use bim_schema::KindRegistry;
 
 use crate::json;
 
@@ -39,6 +46,9 @@ pub struct Project {
     pub dir: PathBuf,
     /// The live document: the result of replaying the journal.
     pub doc: Document,
+    /// The kinds the project knows: the core kinds plus those of its trade packages. Not applied
+    /// to the journal on replay; `bim apply` checks new ops against it.
+    pub kinds: KindRegistry,
     /// The name each entity was written with in the journal (created, referenced or both).
     names: HashMap<EntityId, String>,
     /// The journal text as read.
@@ -74,19 +84,34 @@ pub fn init(dir: &Path) -> Result<(), CliError> {
     }
 }
 
-impl Project {
-    /// Reads `<dir>/doc.oplog` and replays it. A missing directory, a directory without a journal,
-    /// an unreadable journal and a corrupt one (an invalid line, or an op the document refuses)
-    /// are all [`CliError::Input`]; the corrupt-line message names the line.
-    pub fn open(dir: &Path) -> Result<Project, CliError> {
-        match fs::metadata(dir) {
-            Ok(meta) if meta.is_dir() => {}
-            Ok(_) => return Err(CliError::Input(format!("{}: not a directory", dir.display()))),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                return Err(CliError::Input(format!("{}: no such directory", dir.display())));
-            }
-            Err(e) => return Err(io_error(dir, &e)),
+/// Checks that `dir` is an existing directory.
+pub(crate) fn check_dir(dir: &Path) -> Result<(), CliError> {
+    match fs::metadata(dir) {
+        Ok(meta) if meta.is_dir() => Ok(()),
+        Ok(_) => Err(CliError::Input(format!("{}: not a directory", dir.display()))),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            Err(CliError::Input(format!("{}: no such directory", dir.display())))
         }
+        Err(e) => Err(io_error(dir, &e)),
+    }
+}
+
+/// The kind registry of the project in `dir`: the core kinds plus its trade packages
+/// (`<dir>/plugins/*/trade.json`). A malformed or inconsistent package is an input error that
+/// names the package's `trade.json`.
+pub(crate) fn load_kinds(dir: &Path) -> Result<KindRegistry, CliError> {
+    KindRegistry::load(dir).map_err(|e| CliError::Input(e.to_string()))
+}
+
+impl Project {
+    /// Loads the kind registry of `<dir>/plugins`, then reads `<dir>/doc.oplog` and replays it. A
+    /// missing directory, a malformed or inconsistent trade package, a directory without a journal,
+    /// an unreadable journal and a corrupt one (an invalid line, or an op the document refuses)
+    /// are all [`CliError::Input`]; the corrupt-line message names the line and the package message
+    /// names the `trade.json`.
+    pub fn open(dir: &Path) -> Result<Project, CliError> {
+        check_dir(dir)?;
+        let kinds = load_kinds(dir)?;
         let path = dir.join(OPLOG);
         let bytes = match fs::read(&path) {
             Ok(bytes) => bytes,
@@ -101,10 +126,13 @@ impl Project {
         let journal = String::from_utf8(bytes).map_err(|_| {
             CliError::Input(format!("{}: corrupt journal: not valid UTF-8", path.display()))
         })?;
-        Project::from_journal(dir, journal)
+        let mut project = Project::from_journal(dir, journal)?;
+        project.kinds = kinds;
+        Ok(project)
     }
 
-    /// Replays journal text that was read from `<dir>/doc.oplog`.
+    /// Replays journal text that was read from `<dir>/doc.oplog`, without checking it against any
+    /// kind registry (the core kinds are the one it carries until [`Project::open`] replaces it).
     fn from_journal(dir: &Path, journal: String) -> Result<Project, CliError> {
         let corrupt = |line: usize, reason: &str| {
             CliError::Input(format!("{}:{line}: corrupt journal: {reason}", dir.join(OPLOG).display()))
@@ -118,7 +146,7 @@ impl Project {
                 names.entry(resolve_id(name)).or_insert_with(|| name.to_string());
             }
         }
-        Ok(Project { dir: dir.to_path_buf(), doc, names, journal })
+        Ok(Project { dir: dir.to_path_buf(), doc, kinds: KindRegistry::core(), names, journal })
     }
 
     /// The name to show for `id`: the live entity's `_name` prop, else the name it was written

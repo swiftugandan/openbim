@@ -6,6 +6,9 @@ use std::fs;
 use std::io::Write;
 use std::path::Path;
 
+use bim_doc::Document;
+use bim_schema::{KindRegistry, SchemaError};
+
 use crate::ops::{self, LineOp, Located};
 use crate::json;
 use crate::project::{self, Project};
@@ -25,6 +28,9 @@ pub(crate) fn init(args: &[OsString], _out: &mut dyn Write) -> Outcome {
 /// `*.json` files are JSON ops (spec/cli.md), anything else the line format. The whole file is
 /// parsed and checked first, then applied to a copy of the live document; only when every op has
 /// applied is the journal rewritten. Any failure before that point leaves the journal untouched.
+///
+/// Each op is also checked against the project's kind registry (core kinds plus the trade packages
+/// in `<dir>/plugins`; spec/schema.md, Extension kinds), see [`check_kinds`].
 pub(crate) fn apply(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let [dir, file] = operands::<2>(args, "apply <dir> <ops-file>")?;
     let (dir, file) = (Path::new(dir), Path::new(file));
@@ -32,11 +38,91 @@ pub(crate) fn apply(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let project = Project::open(dir)?;
     let mut scratch = project.doc.clone();
     for FileOp { at, op } in &parsed {
+        check_kinds(&project.kinds, &scratch, op).map_err(|e| CliError::Input(format!("{at}: {e}")))?;
         op.apply_to(&mut scratch).map_err(|e| CliError::Input(format!("{at}: {}", op.describe_error(&e))))?;
     }
     let ops: Vec<LineOp> = parsed.into_iter().map(|file_op| file_op.op).collect();
     project.append(&ops)?;
     Ok(0)
+}
+
+/// The kind rules of spec/schema.md (Extension kinds) for one op, checked against `doc` as it
+/// stands when the op is reached (so an entity created earlier in the same file is known):
+///
+/// * a `create` needs a kind that is a core kind or declared by a loaded package;
+/// * a `set` on an entity of an extension kind needs a declared prop of that type. (A JSON create's
+///   `props` arrive here as one `set` each, so the create and each of its props are checked in order.)
+///
+/// A `delete` is not checked. A `set` on an entity that does not exist is left for the document to
+/// refuse (``entity `x` not found``), and so is a `set` on an entity whose kind the registry no
+/// longer knows (its package was removed): there is nothing to check it against.
+fn check_kinds(kinds: &KindRegistry, doc: &Document, op: &LineOp) -> Result<(), SchemaError> {
+    match op {
+        LineOp::Create { kind, .. } => kinds.check_create(kind, &[]),
+        LineOp::Set { seed, key, value } => match doc.get(ops::resolve_id(seed)) {
+            Some(entity) if kinds.kind(&entity.kind).is_some() => kinds.check_set(&entity.kind, key, &value.to_value()),
+            _ => Ok(()),
+        },
+        LineOp::Delete { .. } => Ok(()),
+    }
+}
+
+/// `bim plugin list <dir> [--json]`: prints the project's trade packages and the core kinds as one
+/// JSON document (spec/cli.md): `{"packages":[{"name","version","abi","kinds","engine"}],
+/// "core_kinds":[…]}`. Packages are sorted by name and so are their kinds; `engine` is the component
+/// path relative to `<dir>` (`plugins/<package>/<engine>`), or `null` for a package without one (the
+/// file is not looked at). The output is the same with or without `--json`. A malformed or
+/// inconsistent package is an input error (exit 2) naming its `trade.json`. The project need not
+/// have a journal: only `<dir>` and its `plugins` are read.
+pub(crate) fn plugin(args: &[OsString], out: &mut dyn Write) -> Outcome {
+    let operands_only: Vec<OsString> = args.iter().filter(|a| a.as_os_str() != "--json").cloned().collect();
+    let [subcommand, dir] = operands::<2>(&operands_only, "plugin list <dir> --json")?;
+    if subcommand != "list" {
+        return Err(CliError::Usage(format!(
+            "unknown plugin command `{}` (expected `list`)",
+            subcommand.to_string_lossy()
+        )));
+    }
+    let dir = Path::new(dir);
+    project::check_dir(dir)?;
+    let kinds = project::load_kinds(dir)?;
+    let mut text = String::from("{\"packages\":[");
+    for (i, package) in kinds.packages().iter().enumerate() {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str("{\"name\":");
+        json::write_str(&mut text, &package.name);
+        text.push_str(",\"version\":");
+        json::write_str(&mut text, &package.version);
+        text.push_str(",\"abi\":");
+        json::write_str(&mut text, &package.abi);
+        text.push_str(",\"kinds\":");
+        write_strings(&mut text, package.kinds.iter().map(String::as_str));
+        text.push_str(",\"engine\":");
+        match &package.engine {
+            Some(engine) => json::write_str(&mut text, &format!("plugins/{}/{engine}", package.name)),
+            None => text.push_str("null"),
+        }
+        text.push('}');
+    }
+    text.push_str("],\"core_kinds\":");
+    write_strings(&mut text, bim_schema::CORE_KINDS);
+    text.push('}');
+    emit(out, &text)?;
+    Ok(0)
+}
+
+/// Appends a JSON array of strings.
+fn write_strings<'a>(out: &mut String, items: impl IntoIterator<Item = &'a str>) {
+    out.push('[');
+    for (i, item) in items.into_iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        json::write_str(out, item);
+    }
+    out.push(']');
 }
 
 /// `bim show <dir> <id> [--json]`: prints the live entity named `<id>` (a ULID or a seed) as
