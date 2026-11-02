@@ -138,7 +138,7 @@ impl Project {
 
     /// Replays journal text that was read from `<dir>/doc.oplog`, without checking it against any
     /// kind registry (the core kinds are the one it carries until [`Project::open`] replaces it).
-    fn from_journal(dir: &Path, journal: String) -> Result<Project, CliError> {
+    pub(crate) fn from_journal(dir: &Path, journal: String) -> Result<Project, CliError> {
         let corrupt = |line: usize, reason: &str| {
             CliError::Input(format!("{}:{line}: corrupt journal: {reason}", dir.join(OPLOG).display()))
         };
@@ -163,6 +163,11 @@ impl Project {
             return name.clone();
         }
         self.names.get(&id).cloned().unwrap_or_else(|| id.to_string())
+    }
+
+    /// The name `id` was written with in the journal (created, referenced or both), if it was.
+    pub(crate) fn written_name(&self, id: EntityId) -> Option<&str> {
+        self.names.get(&id).map(String::as_str)
     }
 
     /// Every dangling ref, in `bim-doc`'s order (by source id, then key); a prop whose value holds

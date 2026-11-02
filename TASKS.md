@@ -227,7 +227,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-store` (rusqlite, bundled): `<dir>/bim.sqlite` holds the CRDT state, the op log (content-addressed: op id = hash of its canonical encoding) and revisions; every `bim apply` is one SQLite transaction; `doc.oplog` stays as the text journal. CLI `commit`, `log`, `diff <dir> <revA> <revB>` per spec/cli.md. Judge: sqlite3 `PRAGMA integrity_check`, a process killed mid-apply leaves the previous state, revision diffs match.
   - Details: `log` op ids, revision diff keys and exit codes are in spec/cli.md.
 
-- [ ] T3.3: WebSocket sync between peers
+- [x] T3.3: WebSocket sync between peers
   - Files: Cargo.toml, Cargo.lock, crates/bim-sync/, crates/bim-cli/
   - Opens: T3.2
   - Builder: sonnet

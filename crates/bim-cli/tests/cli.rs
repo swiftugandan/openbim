@@ -1051,6 +1051,21 @@ fn usage_errors_exit_2() {
         vec![&"log"],
         vec![&"log", &dir, &dir],
         vec![&"log", &"--json"],
+        vec![&"sync"],
+        vec![&"sync", &dir],
+        vec![&"sync", &dir, &"ws://127.0.0.1:1", &"extra"],
+        vec![&"sync", &dir, &"http://127.0.0.1:1"],
+        vec![&"sync", &dir, &"wss://127.0.0.1:1"],
+        vec![&"sync", &"serve"],
+        vec![&"sync", &"serve", &dir],
+        vec![&"sync", &"serve", &dir, &"--port"],
+        vec![&"sync", &"serve", &dir, &"--port", &"x"],
+        vec![&"sync", &"serve", &dir, &"--port", &"-1"],
+        vec![&"sync", &"serve", &dir, &"--port", &"65536"],
+        vec![&"sync", &"serve", &"--port", &"1"],
+        vec![&"sync", &"serve", &dir, &dir, &"--port", &"1"],
+        vec![&"sync", &"serve", &dir, &"--port", &"1", &"--port", &"2"],
+        vec![&"sync", &dir, &"--port", &"1"],
     ];
     for args in cases {
         let run = bim(&args).rejected();
@@ -1572,4 +1587,319 @@ fn concurrent_applies_never_lose_or_tear_anything() {
     commit(&dir, "all");
     assert_eq!(log(&dir)[0].ops.len(), 1 + 2 * won);
     assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"]);
+}
+
+// ---- sync (T3.3) -------------------------------------------------------------------------------
+
+/// A `bim sync serve` process on a project, killed when dropped.
+struct Server {
+    child: std::process::Child,
+    port: u16,
+    url: String,
+}
+
+impl Server {
+    /// Starts the server on `dir` and waits for its `listening <port>` line.
+    fn start(dir: &Path) -> Server {
+        use std::io::{BufRead, BufReader};
+        use std::process::Stdio;
+        let mut child = Command::new(BIM)
+            .arg("sync")
+            .arg("serve")
+            .arg(dir)
+            .args(["--port", "0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn bim sync serve");
+        let mut stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+        let (announce, announced) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            let _ = stdout.read_line(&mut line);
+            let _ = announce.send(line);
+            // Keep the pipe drained, so a chatty server could never block on it.
+            let mut sink = String::new();
+            while stdout.read_line(&mut sink).map(|n| n > 0).unwrap_or(false) {
+                sink.clear();
+            }
+        });
+        // A server that never announces itself must not hang the test run.
+        let line = announced.recv_timeout(std::time::Duration::from_secs(60)).unwrap_or_else(|_| {
+            let _ = child.kill();
+            panic!("the server did not announce its port within 60 s")
+        });
+        let port: u16 = line
+            .strip_prefix("listening ")
+            .and_then(|rest| rest.trim_end().parse().ok())
+            .unwrap_or_else(|| panic!("the first stdout line was {line:?}, not `listening <port>`"));
+        assert_ne!(port, 0, "the real port is announced, never 0");
+        Server { child, port, url: format!("ws://127.0.0.1:{port}") }
+    }
+
+    fn kill(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}
+
+fn sync(dir: &Path, server: &Server) -> Run {
+    bim(&[&"sync", &dir, &server.url.as_str()])
+}
+
+/// `bim validate` output, sorted, with the exit code.
+fn validation(dir: &Path) -> (i32, Vec<String>) {
+    let run = bim(&[&"validate", &dir]);
+    assert!(run.code == 0 || run.code == 1, "validate exited {}: {}", run.code, run.err);
+    let mut lines: Vec<String> = run.out.lines().map(str::to_string).collect();
+    lines.sort();
+    (run.code, lines)
+}
+
+const SYNC_BASE: &str = "create L1 Level\nset L1 elevation num 0\ncreate L2 Level\nset L2 elevation num 3\n\
+                         create W1 Wall\nset W1 level ref L1\nset W1 height num 3\n";
+
+#[test]
+fn init_gives_each_project_a_persisted_peer_id_that_copies_share() {
+    let s = Scratch::new();
+    let (a, b) = (s.project("a", ""), s.project("b", ""));
+    let peer = |dir: &Path| bim_sync::SyncDb::open_existing(&dir.join("bim.sqlite")).unwrap().unwrap().peer().unwrap();
+    let (pa, pb) = (peer(&a).expect("a peer id"), peer(&b).expect("a peer id"));
+    assert_ne!(pa, pb, "independent random ids");
+    assert_ne!(pa, 0);
+    // init again: the id stays, and the store is not even rewritten.
+    let before = store_bytes(&a);
+    bim(&[&"init", &a]).expect(0);
+    assert_eq!(peer(&a), Some(pa));
+    assert_eq!(store_bytes(&a), before);
+    // Applying ops keeps it. A byte copy of the directory shares it.
+    bim(&[&"apply", &a, &s.write("x.ops", "create x Wall\n")]).expect(0);
+    assert_eq!(peer(&a), Some(pa));
+    let copy = s.path("copy");
+    fs::create_dir(&copy).unwrap();
+    for file in ["doc.oplog", "bim.sqlite"] {
+        fs::copy(a.join(file), copy.join(file)).unwrap();
+    }
+    assert_eq!(peer(&copy), Some(pa));
+    // Many projects, many ids.
+    let ids: std::collections::BTreeSet<u32> = (0..20).map(|i| peer(&s.project(&format!("p{i}"), "")).unwrap()).collect();
+    assert_eq!(ids.len(), 20);
+}
+
+#[test]
+fn two_projects_sync_through_a_server_and_end_equal() {
+    let s = Scratch::new();
+    let (srv, a, b) = (s.project("srv", ""), s.project("a", SYNC_BASE), s.project("b", ""));
+    let server = Server::start(&srv);
+    let run = sync(&a, &server).expect(0);
+    assert_eq!((run.out.as_str(), run.err.as_str()), ("", ""), "a successful sync prints nothing");
+    sync(&b, &server).expect(0);
+    assert_eq!(hash(&a), hash(&b));
+    assert_eq!(hash(&srv), hash(&a), "the server directory holds the merged state");
+    assert_eq!(bim(&[&"diff", &a, &b]).expect(0).out, "same\n");
+    // Edit on both sides, sync both ways.
+    bim(&[&"apply", &a, &s.write("a.ops", "set W1 height num 4\ncreate extra Wall\n")]).expect(0);
+    bim(&[&"apply", &b, &s.write("b.ops", "delete L2\nset W1 name text north\n")]).expect(0);
+    assert_ne!(hash(&a), hash(&b));
+    for dir in [&a, &b, &a] {
+        sync(dir, &server).expect(0);
+    }
+    assert_eq!(hash(&a), hash(&b));
+    assert_eq!(hash(&srv), hash(&a));
+    assert_eq!(validation(&a), validation(&b));
+    let shown = show(&a, "W1");
+    assert_eq!(shown, show(&b, "W1"));
+    assert!(shown.contains("\"name\":\"north\"") && shown.contains("\"extra\"") == false, "{shown}");
+    assert!(shown.contains("\"height\":4"), "{shown}");
+    bim(&[&"show", &b, &"extra", &"--json"]).expect(0);
+    bim(&[&"show", &a, &"L2", &"--json"]).rejected();
+    // A converged sync touches nothing: not a byte, not a modification time.
+    let before: Vec<_> = [&srv, &a, &b].iter().map(|d| (journal(d), store_bytes(d))).collect();
+    let modified: Vec<_> = [&a, &b].iter().map(|d| fs::metadata(d.join("doc.oplog")).unwrap().modified().unwrap()).collect();
+    for dir in [&a, &b, &a, &b] {
+        sync(dir, &server).expect(0);
+    }
+    let after: Vec<_> = [&srv, &a, &b].iter().map(|d| (journal(d), store_bytes(d))).collect();
+    assert_eq!(before, after);
+    let modified_after: Vec<_> = [&a, &b].iter().map(|d| fs::metadata(d.join("doc.oplog")).unwrap().modified().unwrap()).collect();
+    assert_eq!(modified, modified_after);
+    for dir in [&srv, &a, &b] {
+        assert_eq!(files_in(dir), ["bim.sqlite", "doc.oplog"], "no temporary file is left behind");
+    }
+    // The store follows the journal, and revisions work on top of a synced project.
+    assert_state_matches_journal(&b);
+    let rev = commit(&b, "after sync");
+    assert_eq!(rev, hash(&b));
+    assert!(!log(&b)[0].ops.is_empty());
+}
+
+#[test]
+fn an_unreachable_server_exits_2_and_leaves_the_directory_byte_identical() {
+    let s = Scratch::new();
+    let a = s.project("a", SYNC_BASE);
+    bim(&[&"apply", &a, &s.write("more.ops", "set W1 height num 9\n")]).expect(0);
+    // A port nothing listens on.
+    let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let snapshot = |dir: &Path| (journal(dir), store_bytes(dir), files_in(dir));
+    let before = snapshot(&a);
+    let modified = (fs::metadata(a.join("doc.oplog")).unwrap().modified().unwrap(), fs::metadata(a.join("bim.sqlite")).unwrap().modified().unwrap());
+    let run = bim(&[&"sync", &a, &format!("ws://127.0.0.1:{port}")]).rejected();
+    assert!(run.err.contains("127.0.0.1"), "{}", run.err);
+    assert_eq!(snapshot(&a), before);
+    assert_eq!(
+        (fs::metadata(a.join("doc.oplog")).unwrap().modified().unwrap(), fs::metadata(a.join("bim.sqlite")).unwrap().modified().unwrap()),
+        modified
+    );
+    // A project that never had a store gets none from a failed sync.
+    let old = s.path("old");
+    fs::create_dir(&old).unwrap();
+    fs::write(old.join("doc.oplog"), SYNC_BASE).unwrap();
+    bim(&[&"sync", &old, &format!("ws://127.0.0.1:{port}")]).rejected();
+    assert_eq!(files_in(&old), ["doc.oplog"]);
+    assert_eq!(journal(&old), SYNC_BASE.as_bytes());
+    // Something that listens but is not a WebSocket server, and one that hangs up at once.
+    let junk = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let junk_port = junk.local_addr().unwrap().port();
+    std::thread::spawn(move || {
+        use std::io::{Read, Write};
+        for (n, stream) in junk.incoming().enumerate().take(2) {
+            let mut stream = stream.unwrap();
+            if n == 0 {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        }
+    });
+    bim(&[&"sync", &a, &format!("ws://127.0.0.1:{junk_port}")]).rejected();
+    bim(&[&"sync", &a, &format!("ws://127.0.0.1:{junk_port}")]).rejected();
+    assert_eq!(snapshot(&a), before);
+}
+
+#[test]
+fn sync_refuses_what_is_not_a_project_or_not_a_ws_url_without_creating_anything() {
+    let s = Scratch::new();
+    let nothing = s.path("nothing");
+    bim(&[&"sync", &nothing, &"ws://127.0.0.1:1"]).rejected();
+    assert!(!nothing.exists());
+    let empty = s.path("empty");
+    fs::create_dir(&empty).unwrap();
+    bim(&[&"sync", &empty, &"ws://127.0.0.1:1"]).rejected();
+    assert_eq!(files_in(&empty), Vec::<String>::new());
+    let a = s.project("a", "");
+    for url in ["http://127.0.0.1:1", "wss://127.0.0.1:1", "127.0.0.1:1", "ws://", "ws://x:99999"] {
+        let run = bim(&[&"sync", &a, &url]).rejected();
+        assert!(run.err.contains("usage:"), "{url}: {}", run.err);
+    }
+    assert_eq!(files_in(&a), ["bim.sqlite", "doc.oplog"]);
+    // The server refuses a directory that is not a project before it announces anything.
+    let run = bim(&[&"sync", &"serve", &nothing, &"--port", &"0"]).rejected();
+    assert!(run.err.contains("nothing"), "{}", run.err);
+    assert!(!nothing.exists());
+    bim(&[&"sync", &"serve", &empty, &"--port", &"0"]).rejected();
+    assert_eq!(files_in(&empty), Vec::<String>::new());
+}
+
+#[test]
+fn a_port_in_use_is_an_input_error_and_the_flag_may_come_first() {
+    let s = Scratch::new();
+    let srv = s.project("srv", "");
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = held.local_addr().unwrap().port().to_string();
+    let run = bim(&[&"sync", &"serve", &srv, &"--port", &port.as_str()]).rejected();
+    assert!(run.err.contains("cannot listen"), "{}", run.err);
+    let run = bim(&[&"sync", &"serve", &"--port", &port.as_str(), &srv]).rejected();
+    assert!(run.err.contains("cannot listen"), "the flag may precede the directory: {}", run.err);
+}
+
+#[test]
+fn a_killed_server_loses_nothing_a_finished_sync_delivered() {
+    let s = Scratch::new();
+    let (srv, a, b, c) = (s.project("srv", ""), s.project("a", SYNC_BASE), s.project("b", ""), s.project("c", ""));
+    let mut server = Server::start(&srv);
+    sync(&a, &server).expect(0);
+    bim(&[&"apply", &b, &s.write("b0.ops", "create bee Wall\nset bee h num 2\n")]).expect(0);
+    sync(&b, &server).expect(0);
+    server.kill(); // SIGKILL: no chance to flush anything
+    assert_eq!(files_in(&srv), ["bim.sqlite", "doc.oplog"], "no hot journal is left");
+    let server = Server::start(&srv);
+    sync(&c, &server).expect(0);
+    assert_eq!(hash(&c), hash(&srv));
+    for dir in [&a, &b, &a] {
+        sync(dir, &server).expect(0);
+    }
+    assert_eq!(hash(&a), hash(&b));
+    assert_eq!(hash(&a), hash(&c));
+    assert_eq!(hash(&a), hash(&srv));
+    show(&c, "bee");
+    show(&c, "W1");
+}
+
+#[test]
+fn a_server_survives_garbage_from_the_network() {
+    use std::io::{Read, Write};
+    let s = Scratch::new();
+    let (srv, a, b) = (s.project("srv", ""), s.project("a", SYNC_BASE), s.project("b", ""));
+    let server = Server::start(&srv);
+    let garbage: [&[u8]; 5] = [
+        b"",
+        b"\xff\xfe\x00\x01 not http",
+        b"GET / HTTP/1.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n\x82\xff\xff\xff\xff\xff\xff\xff\xff",
+        b"POST / HTTP/1.1\r\nContent-Length: 4\r\n\r\nbody",
+        &[b'G'; 100_000],
+    ];
+    for bytes in garbage {
+        let mut socket = std::net::TcpStream::connect(("127.0.0.1", server.port)).unwrap();
+        let _ = socket.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+        let _ = socket.write_all(bytes);
+        let _ = socket.shutdown(std::net::Shutdown::Write);
+        let mut sink = Vec::new();
+        let _ = socket.read_to_end(&mut sink);
+    }
+    sync(&a, &server).expect(0);
+    sync(&b, &server).expect(0);
+    assert_eq!(hash(&a), hash(&b));
+}
+
+#[test]
+fn concurrent_syncs_through_one_server_converge() {
+    let s = Scratch::new();
+    let srv = s.project("srv", "");
+    let dirs: Vec<PathBuf> = (0..6).map(|i| s.project(&format!("p{i}"), if i == 0 { "create shared Wall\n" } else { "" })).collect();
+    let server = Server::start(&srv);
+    for dir in &dirs {
+        sync(dir, &server).expect(0);
+    }
+    // Everyone now edits the shared entity and adds one of their own, offline.
+    for (i, dir) in dirs.iter().enumerate() {
+        bim(&[&"apply", dir, &s.write(&format!("e{i}.ops"), format!("set shared k num {i}\ncreate e{i} Wall\nset e{i} h num {i}\n"))]).expect(0);
+    }
+    for _ in 0..2 {
+        let runs: Vec<Run> = std::thread::scope(|scope| {
+            let handles: Vec<_> = dirs.iter().map(|d| scope.spawn(|| sync(d, &server))).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for run in runs {
+            run.expect(0);
+        }
+    }
+    for dir in &dirs {
+        sync(dir, &server).expect(0);
+    }
+    let reference = hash(&srv);
+    for dir in &dirs {
+        assert_eq!(hash(dir), reference, "{}", dir.display());
+    }
+    assert!(show(&dirs[3], "e5").contains("\"h\":5"));
+    // The contested key has exactly one winner, the same everywhere.
+    let winner = show(&srv, "shared");
+    for dir in &dirs {
+        assert_eq!(show(dir, "shared"), winner);
+    }
 }
