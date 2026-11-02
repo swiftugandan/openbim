@@ -1,0 +1,4 @@
+# The same compiler for cloud builders and the gate that re-checks their work.
+[toolchain]
+channel = "1.96.0"
+targets = ["wasm32-unknown-unknown", "wasm32-wasip2"]

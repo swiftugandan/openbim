@@ -3,7 +3,10 @@
     "PermissionRequest": [
       {
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-unattended.sh\"" }
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-unattended.sh\""
+          }
         ]
       }
     ],
@@ -11,7 +14,21 @@
       {
         "matcher": "AskUserQuestion",
         "hooks": [
-          { "type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-unattended.sh\"" }
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/.claude/hooks/cloud-unattended.sh\""
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "timeout": 900,
+            "command": "bash \"$CLAUDE_PROJECT_DIR/loop/cloud-session-start.sh\""
+          }
         ]
       }
     ]

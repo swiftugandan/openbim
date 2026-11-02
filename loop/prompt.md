@@ -13,7 +13,7 @@ The Spec bullet above is the contract. Its Verification is: `{{VERIFY}}`
 - `spec/` holds the frozen contracts (schema, CLI, MCP, plugins, web); follow them exactly.
 - The loop also reruns every earlier task's Verification after yours; do not break them.
 - Oracles used by judges live in `.oracles/` (Python: `.oracles/py/bin/python`); you may use them to test.
-- Do not run `git commit`, `git add`, `git stash`, `git reset` or `git checkout`; the loop commits for you.
+{{GIT_RULE}}
 - Scratch work and probes go under `.loop/probes/{{ID}}/` (git-ignored). Cargo builds for probes use `CARGO_TARGET_DIR=.build/probes`.
 - No network services and no credentials. External crates and npm packages are allowed when the task needs them: pin exact versions; nothing may reach the network at run time.
 
@@ -48,6 +48,4 @@ failure details and the plan if there is one, then repeat CHECK, then `AUDIT: {{
 
 ## Verdict
 
-Finish by writing the file `.loop/verdict/{{ID}}` with exactly one line:
-`PASS` if the final CHECK and AUDIT both passed, otherwise `FAIL: <one-line reason>`.
-Then stop. Do not tick TASKS.md and do not commit; the loop does both after re-checking.
+{{FINISH}}
