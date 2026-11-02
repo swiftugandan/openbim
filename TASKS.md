@@ -312,7 +312,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M5 Standards packs and interoperability
 
-- [ ] T5.1: STEP (ISO 10303-21) reader/writer and typed IFC4 entity layer
+- [x] T5.1: STEP (ISO 10303-21) reader/writer and typed IFC4 entity layer
   - Files: Cargo.toml, Cargo.lock, crates/standards/ifc/
   - Opens: T1.6
   - Needs: .oracles/py/bin/python
