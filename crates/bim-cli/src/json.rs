@@ -1,5 +1,5 @@
 //! A small, strict JSON (RFC 8259) reader and writer, enough for ops files, journal lines and
-//! `--json` output. Hand-written because the workspace takes no external crates.
+//! `--json` output. Hand-written so that `bim-cli` needs no JSON crate.
 //!
 //! The reader keeps object members in file order (duplicates included, so callers can reject
 //! them), rejects trailing garbage, raw control characters in strings, lone surrogates and numbers

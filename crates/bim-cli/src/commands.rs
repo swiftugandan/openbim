@@ -8,26 +8,39 @@ use std::path::Path;
 
 use bim_doc::Document;
 use bim_schema::{KindRegistry, SchemaError};
+use bim_store::{Store, STORE_FILE};
 
 use crate::ops::{self, LineOp, Located};
 use crate::json;
 use crate::project::{self, Project};
+use crate::store::{existing_store, store_error};
 use crate::CliError;
 
 type Outcome = Result<u8, CliError>;
 
-/// `bim init <dir>`: creates `<dir>/doc.oplog`, empty, unless it exists. Prints nothing.
+/// `bim init <dir>`: creates `<dir>/doc.oplog`, empty, unless it exists, and `<dir>/bim.sqlite`,
+/// an empty store, unless it exists. Records no revision. Prints nothing.
 pub(crate) fn init(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let [dir] = operands::<1>(args, "init <dir>")?;
-    project::init(Path::new(dir))?;
+    let dir = Path::new(dir);
+    // Refuse before creating anything if something that is not a file stands where the store goes.
+    let store = dir.join(STORE_FILE);
+    if store.exists() && !store.is_file() {
+        return Err(CliError::Input(format!("{}: exists and is not a file", store.display())));
+    }
+    project::init(dir)?;
+    Store::open_or_create(dir).map_err(|e| store_error(dir, e))?;
     Ok(0)
 }
 
-/// `bim apply <dir> <ops-file>`: appends the file's ops to the journal, all or none. Prints nothing.
+/// `bim apply <dir> <ops-file>`: appends the file's ops to the journal and the store, all or none.
+/// Prints nothing.
 ///
 /// `*.json` files are JSON ops (spec/cli.md), anything else the line format. The whole file is
 /// parsed and checked first, then applied to a copy of the live document; only when every op has
-/// applied is the journal rewritten. Any failure before that point leaves the journal untouched.
+/// applied are the journal and the store written, in one SQLite transaction
+/// ([`Project::apply_ops`]). Any failure before that point leaves both untouched, and a file with
+/// no ops does not even open the store.
 ///
 /// Each op is also checked against the project's kind registry (core kinds plus the trade packages
 /// in `<dir>/plugins`; spec/schema.md, Extension kinds), see [`check_kinds`].
@@ -42,7 +55,7 @@ pub(crate) fn apply(args: &[OsString], _out: &mut dyn Write) -> Outcome {
         op.apply_to(&mut scratch).map_err(|e| CliError::Input(format!("{at}: {}", op.describe_error(&e))))?;
     }
     let ops: Vec<LineOp> = parsed.into_iter().map(|file_op| file_op.op).collect();
-    project.append(&ops)?;
+    project.apply_ops(&ops, &scratch)?;
     Ok(0)
 }
 
@@ -131,7 +144,7 @@ fn write_strings<'a>(out: &mut String, items: impl IntoIterator<Item = &'a str>)
 /// their target. The output is that JSON document with or without `--json`. An id that is not a
 /// live entity (unknown or deleted) is an input error (exit 2).
 pub(crate) fn show(args: &[OsString], out: &mut dyn Write) -> Outcome {
-    let operands_only: Vec<OsString> = args.iter().filter(|a| a.as_os_str() != "--json").cloned().collect();
+    let (operands_only, _) = split_json_flag(args);
     let [dir, name] = operands::<2>(&operands_only, "show <dir> <id> --json")?;
     let project = Project::open(Path::new(dir))?;
     let name = name.to_str().ok_or_else(|| CliError::Input(format!("id `{}` is not valid UTF-8", name.to_string_lossy())))?;
@@ -175,19 +188,139 @@ pub(crate) fn validate(args: &[OsString], out: &mut dyn Write) -> Outcome {
     Ok(u8::from(!dangling.is_empty()))
 }
 
-/// `bim diff <dirA> <dirB>`: prints `same` (exit 0) when the documents' content hashes match, else
-/// `differ` (exit 1). Both projects are opened before anything is printed.
+/// `bim diff <dirA> <dirB>` prints `same` (exit 0) when the documents' content hashes match, else
+/// `differ` (exit 1); both projects are opened before anything is printed.
+///
+/// `bim diff <dir> <revA> <revB> [--json]` compares two recorded revisions of one project and
+/// prints `{"added":[id],"removed":[id],"changed":[{"id","keys":[…]}]}` (spec/cli.md): ids are the
+/// entities' names, sorted; `keys` are the props that differ, sorted (a changed kind shows as
+/// `_kind`). Exit 0 if the revisions hold the same document, else 1; a revision the project does not
+/// have is an input error (exit 2). The operands tell the forms apart: two directories, or a
+/// directory and two revision ids (16 lowercase hex digits).
 pub(crate) fn diff(args: &[OsString], out: &mut dyn Write) -> Outcome {
-    let [a, b] = operands::<2>(args, "diff <dirA> <dirB>")?;
-    let a = Project::open(Path::new(a))?;
-    let b = Project::open(Path::new(b))?;
-    if a.doc.content_hash() == b.doc.content_hash() {
-        emit(out, "same")?;
-        Ok(0)
-    } else {
-        emit(out, "differ")?;
-        Ok(1)
+    let (positional, json) = split_json_flag(args);
+    match (positional.as_slice(), json) {
+        ([a, b], false) => {
+            let a = Project::open(Path::new(a))?;
+            let b = Project::open(Path::new(b))?;
+            if a.doc.content_hash() == b.doc.content_hash() {
+                emit(out, "same")?;
+                Ok(0)
+            } else {
+                emit(out, "differ")?;
+                Ok(1)
+            }
+        }
+        ([dir, rev_a, rev_b], _) => diff_revisions(Path::new(dir), rev_a, rev_b, out),
+        _ => Err(CliError::Usage(format!(
+            "`bim diff <dirA> <dirB>` takes 2 operands and `bim diff <dir> <revA> <revB> --json` takes 3, got {}",
+            positional.len()
+        ))),
     }
+}
+
+fn diff_revisions(dir: &Path, rev_a: &OsString, rev_b: &OsString, out: &mut dyn Write) -> Outcome {
+    let rev = |arg: &OsString| match arg.to_str() {
+        Some(text) if is_rev(text) => Ok(text.to_string()),
+        _ => Err(CliError::Usage(format!(
+            "`bim diff <dir> <revA> <revB>`: `{}` is not a revision id (16 lowercase hex digits)",
+            arg.to_string_lossy()
+        ))),
+    };
+    let (rev_a, rev_b) = (rev(rev_a)?, rev(rev_b)?);
+    Project::open(dir)?;
+    let store = existing_store(dir)?.ok_or_else(|| CliError::Input(format!("unknown revision `{rev_a}`")))?;
+    let diff = store.diff(&rev_a, &rev_b).map_err(|e| store_error(dir, e))?;
+    let mut text = String::from("{\"added\":");
+    write_strings(&mut text, diff.added.iter().map(String::as_str));
+    text.push_str(",\"removed\":");
+    write_strings(&mut text, diff.removed.iter().map(String::as_str));
+    text.push_str(",\"changed\":[");
+    for (i, (id, keys)) in diff.changed.iter().enumerate() {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str("{\"id\":");
+        json::write_str(&mut text, id);
+        text.push_str(",\"keys\":");
+        write_strings(&mut text, keys.iter().map(String::as_str));
+        text.push('}');
+    }
+    text.push_str("]}");
+    emit(out, &text)?;
+    Ok(u8::from(!diff.is_empty()))
+}
+
+/// `bim commit <dir> -m <msg>`: records a revision of the document as it is now and prints its id,
+/// the content hash as 16 hex digits (what `bim hash` prints). The revision lists the ops applied
+/// since the previous revision. Committing twice without changes records two revisions with one id.
+pub(crate) fn commit(args: &[OsString], out: &mut dyn Write) -> Outcome {
+    let usage = |what: &str| CliError::Usage(format!("`bim commit <dir> -m <msg>`: {what}"));
+    let (mut dir, mut message) = (None, None);
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        if arg == "-m" {
+            let value = rest.next().ok_or_else(|| usage("`-m` needs a message"))?;
+            if message.replace(value).is_some() {
+                return Err(usage("`-m` given twice"));
+            }
+        } else if dir.replace(arg).is_some() {
+            return Err(usage("takes one directory"));
+        }
+    }
+    let (Some(dir), Some(message)) = (dir, message) else {
+        return Err(usage("needs a directory and a message"));
+    };
+    let message = message
+        .to_str()
+        .ok_or_else(|| CliError::Input(format!("message `{}` is not valid UTF-8", message.to_string_lossy())))?;
+    let project = Project::open(Path::new(dir))?;
+    let rev = project.commit_revision(message)?;
+    emit(out, &rev)?;
+    Ok(0)
+}
+
+/// `bim log <dir> [--json]`: prints `[{"rev","message","ops"}]` on one line, oldest revision first;
+/// `ops` are the ids (16 hex digits) of the ops recorded since the previous revision, in apply
+/// order. `[]` for a project without revisions. Only reads: it never creates `bim.sqlite`.
+pub(crate) fn log(args: &[OsString], out: &mut dyn Write) -> Outcome {
+    let (positional, _) = split_json_flag(args);
+    let [dir] = operands::<1>(&positional, "log <dir> --json")?;
+    let dir = Path::new(dir);
+    Project::open(dir)?;
+    let revisions = match existing_store(dir)? {
+        Some(store) => store.revisions().map_err(|e| store_error(dir, e))?,
+        None => Vec::new(),
+    };
+    let mut text = String::from("[");
+    for (i, revision) in revisions.iter().enumerate() {
+        if i > 0 {
+            text.push(',');
+        }
+        text.push_str("{\"rev\":");
+        json::write_str(&mut text, &revision.rev);
+        text.push_str(",\"message\":");
+        json::write_str(&mut text, &revision.message);
+        text.push_str(",\"ops\":");
+        write_strings(&mut text, revision.ops.iter().map(String::as_str));
+        text.push('}');
+    }
+    text.push(']');
+    emit(out, &text)?;
+    Ok(0)
+}
+
+/// A revision id: 16 lowercase hex digits.
+fn is_rev(text: &str) -> bool {
+    text.len() == 16 && text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+
+/// The operands other than `--json`, and whether `--json` was given.
+fn split_json_flag(args: &[OsString]) -> (Vec<OsString>, bool) {
+    let positional: Vec<OsString> = args.iter().filter(|a| a.as_os_str() != "--json").cloned().collect();
+    let json = positional.len() != args.len();
+    (positional, json)
 }
 
 /// Exactly `N` operands, else a usage error quoting the command's form.
