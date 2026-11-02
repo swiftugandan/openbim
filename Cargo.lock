@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "bim-cli"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+]
+
+[[package]]
 name = "bim-crdt"
 version = "0.1.0"
 dependencies = [
