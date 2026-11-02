@@ -57,7 +57,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M1 Kernel
 
-- [ ] T1.1: bim-doc: content-addressed semantic document graph with op log
+- [x] T1.1: bim-doc: content-addressed semantic document graph with op log
   - Files: Cargo.toml, Cargo.lock, crates/bim-doc/
   - Opens: none
   - Verification: bash judges/T1.1.sh
