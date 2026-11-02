@@ -1,0 +1,10 @@
+[package]
+name = "bim-crdt"
+description = "State-based CRDT replica over bim-doc with conflict diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
