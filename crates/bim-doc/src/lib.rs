@@ -15,8 +15,22 @@
 //!
 //! All hashing here is hand-written (FNV-1a plus a fixed finaliser), so ids and
 //! hashes are identical across runs, platforms and Rust versions.
+//!
+//! Schema version 1 (spec/schema.md, [`Document::SCHEMA_VERSION`]) adds:
+//!
+//! * identity: [`EntityId::parse`] reads a 26-character Crockford-base32 ULID as-is
+//!   and maps any other string through [`EntityId::derive`]; [`EntityId::new_ulid`]
+//!   builds a ULID from its timestamp and randomness fields;
+//! * values: [`Value::Bool`] and [`Value::List`];
+//! * the dependency graph: every `Ref` (also inside Lists, at any depth) is an edge
+//!   from the entity holding it to its target. [`Document::deps`],
+//!   [`Document::dependents`] and [`Document::topo_order`] query it.
+//!
+//! The reserved props `_name` and `_schema` (spec/schema.md) are ordinary props to
+//! this crate: front ends set them with [`Op::Set`] right after a create, so the
+//! kernel's op log holds exactly the ops it was given.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 /// Props excluded from [`Document::content_hash`] (spec/schema.md: "content_hash
@@ -56,9 +70,19 @@ fn mix128(x: u128) -> u128 {
     (u128::from(hi) << 64) | u128::from(lo)
 }
 
+/// Crockford base-32 digits in value order (ULID text encoding, uppercase only).
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Length of a ULID's text form.
+const ULID_LEN: usize = 26;
+
+/// Mask of the 80 random bits of a ULID.
+const ULID_RAND_MASK: u128 = (1u128 << 80) - 1;
+
 /// A 128-bit entity identifier.
 ///
 /// Ordering is numeric on the inner `u128`; documents iterate entities in this order.
+/// For ULIDs ([`EntityId::new_ulid`]) that is time order, then randomness order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EntityId(pub u128);
 
@@ -71,6 +95,49 @@ impl EntityId {
     /// (~2^-128 per pair) probability.
     pub fn derive(seed: &str) -> EntityId {
         EntityId(mix128(fnv1a_128(seed.as_bytes())))
+    }
+
+    /// The id a string names (spec/schema.md, "Identity"). Infallible.
+    ///
+    /// A ULID — exactly 26 characters, each an uppercase Crockford base-32 digit
+    /// (`0-9 A-Z` without `I L O U`), the first at most `7` so the value fits in 128
+    /// bits — is used as-is: its 128-bit value. Any other string (lowercase, aliases,
+    /// other lengths, punctuation, the empty string) is a *seed*: [`EntityId::derive`].
+    pub fn parse(s: &str) -> EntityId {
+        Self::parse_ulid(s).unwrap_or_else(|| EntityId::derive(s))
+    }
+
+    /// The value of `s` if it is a ULID in canonical text form, else `None`.
+    pub fn parse_ulid(s: &str) -> Option<EntityId> {
+        let bytes = s.as_bytes();
+        if bytes.len() != ULID_LEN || bytes[0] > b'7' {
+            return None;
+        }
+        let mut v: u128 = 0;
+        for &c in bytes {
+            let digit = CROCKFORD.iter().position(|&d| d == c)?;
+            v = (v << 5) | digit as u128;
+        }
+        Some(EntityId(v))
+    }
+
+    /// The ULID with timestamp `ms` (milliseconds; only the low 48 bits are kept) and
+    /// randomness `rand` (only the low 80 bits are kept): `(ms << 80) | rand`.
+    /// Deterministic: equal inputs give equal ids.
+    pub fn new_ulid(ms: u64, rand: u128) -> EntityId {
+        EntityId(((ms as u128) << 80) | (rand & ULID_RAND_MASK))
+    }
+
+    /// This id as 26 Crockford base-32 digits, most significant first. Every id has
+    /// one; [`EntityId::parse`] of it gives the id back.
+    pub fn to_ulid_string(&self) -> String {
+        let mut v = self.0;
+        let mut out = [0u8; ULID_LEN];
+        for slot in out.iter_mut().rev() {
+            *slot = CROCKFORD[(v & 31) as usize];
+            v >>= 5;
+        }
+        out.iter().map(|&b| b as char).collect()
     }
 }
 
@@ -89,6 +156,34 @@ pub enum Value {
     Text(String),
     /// A reference to another entity (a dependency edge).
     Ref(EntityId),
+    /// A boolean.
+    Bool(bool),
+    /// An ordered list of values; Refs inside it (at any depth) are dependency edges too.
+    List(Vec<Value>),
+}
+
+impl Value {
+    /// Calls `f` with every Ref target in this value: the value itself if it is a
+    /// `Ref`, and every Ref nested in Lists at any depth, in document order.
+    pub fn for_each_ref(&self, f: &mut impl FnMut(EntityId)) {
+        // Iterative, so a deeply nested List cannot overflow the stack.
+        let mut stack = vec![self];
+        while let Some(v) = stack.pop() {
+            match v {
+                Value::Ref(id) => f(*id),
+                Value::List(items) => stack.extend(items.iter().rev()),
+                Value::Num(_) | Value::Text(_) | Value::Bool(_) => {}
+            }
+        }
+    }
+
+    /// Every Ref target in this value (see [`Value::for_each_ref`]), in document order,
+    /// with repeats.
+    pub fn refs(&self) -> Vec<EntityId> {
+        let mut out = Vec::new();
+        self.for_each_ref(&mut |id| out.push(id));
+        out
+    }
 }
 
 /// A node of the document graph.
@@ -151,6 +246,29 @@ impl fmt::Display for DocError {
 
 impl std::error::Error for DocError {}
 
+/// [`Document::topo_order`] found a dependency cycle among live entities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cycle {
+    /// One cycle: each entity depends on the next, and the last on the first. A
+    /// self-reference is a one-entity cycle.
+    pub path: Vec<EntityId>,
+}
+
+impl fmt::Display for Cycle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("dependency cycle: ")?;
+        for id in &self.path {
+            write!(f, "{id} -> ")?;
+        }
+        match self.path.first() {
+            Some(first) => write!(f, "{first}"),
+            None => f.write_str("(empty)"),
+        }
+    }
+}
+
+impl std::error::Error for Cycle {}
+
 /// A semantic document: entities keyed by id, plus the log of applied ops.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Document {
@@ -159,6 +277,10 @@ pub struct Document {
 }
 
 impl Document {
+    /// The schema version this crate implements (spec/schema.md); front ends store it
+    /// in each entity's reserved `_schema` prop.
+    pub const SCHEMA_VERSION: u32 = 1;
+
     /// An empty document with an empty log.
     pub fn new() -> Document {
         Document::default()
@@ -237,39 +359,145 @@ impl Document {
             h.u64(props.len() as u64);
             for (k, v) in props {
                 h.str(k);
-                match v {
-                    Value::Num(x) => {
-                        h.byte(0);
-                        h.u64(canonical_f64_bits(*x));
-                    }
-                    Value::Text(s) => {
-                        h.byte(1);
-                        h.str(s);
-                    }
-                    Value::Ref(id) => {
-                        h.byte(2);
-                        h.u128(id.0);
-                    }
-                }
+                hash_value(&mut h, v);
             }
         }
         h.finish()
     }
 
-    /// Props whose [`Value::Ref`] target is not a live entity, as
-    /// `(source entity id, prop key)`, sorted by id then key.
+    /// Props holding a Ref (directly, or nested in Lists at any depth) whose target
+    /// is not a live entity, as `(source entity id, prop key)`, each prop once,
+    /// sorted by id then key.
     pub fn dangling_refs(&self) -> Vec<(EntityId, String)> {
         let mut out = Vec::new();
         for e in self.entities.values() {
             for (k, v) in &e.props {
-                if let Value::Ref(target) = v {
-                    if !self.entities.contains_key(target) {
-                        out.push((e.id, k.clone()));
-                    }
+                let mut dangling = false;
+                v.for_each_ref(&mut |target| dangling |= !self.entities.contains_key(&target));
+                if dangling {
+                    out.push((e.id, k.clone()));
                 }
             }
         }
         out
+    }
+
+    /// The entities `id` depends on: every Ref target in its props, including Refs
+    /// nested in Lists at any depth, sorted and deduplicated. Targets that are not
+    /// live are included. Empty when `id` is not live.
+    pub fn deps(&self, id: EntityId) -> Vec<EntityId> {
+        self.dep_set(id).into_iter().collect()
+    }
+
+    /// The live entities that depend on `id` (hold a Ref to it, directly or inside a
+    /// List), sorted and deduplicated. `id` need not be live.
+    pub fn dependents(&self, id: EntityId) -> Vec<EntityId> {
+        self.entities
+            .values()
+            .filter(|e| e.props.values().any(|v| {
+                let mut hit = false;
+                v.for_each_ref(&mut |t| hit |= t == id);
+                hit
+            }))
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// Every live entity exactly once, each after all of its live dependencies
+    /// (edges to missing targets are ignored). Among entities that are ready at the
+    /// same time the smallest id comes first, so the order is deterministic.
+    ///
+    /// Fails with a [`Cycle`] when the live dependency graph has one; a
+    /// self-reference is a cycle.
+    pub fn topo_order(&self) -> Result<Vec<EntityId>, Cycle> {
+        // Live out-edges (entity -> its live deps) and the reverse adjacency.
+        let mut live_deps: BTreeMap<EntityId, Vec<EntityId>> = BTreeMap::new();
+        let mut users: BTreeMap<EntityId, Vec<EntityId>> = BTreeMap::new();
+        let mut pending: BTreeMap<EntityId, usize> = BTreeMap::new();
+        for &id in self.entities.keys() {
+            let deps: Vec<EntityId> =
+                self.dep_set(id).into_iter().filter(|t| self.entities.contains_key(t)).collect();
+            for &t in &deps {
+                users.entry(t).or_default().push(id);
+            }
+            pending.insert(id, deps.len());
+            live_deps.insert(id, deps);
+        }
+        let mut ready: BTreeSet<EntityId> =
+            pending.iter().filter(|(_, &n)| n == 0).map(|(&id, _)| id).collect();
+        let mut order = Vec::with_capacity(self.entities.len());
+        while let Some(id) = ready.pop_first() {
+            order.push(id);
+            for &user in users.get(&id).map(Vec::as_slice).unwrap_or(&[]) {
+                let n = pending.get_mut(&user).expect("every user is live");
+                *n -= 1;
+                if *n == 0 {
+                    ready.insert(user);
+                }
+            }
+        }
+        if order.len() == self.entities.len() {
+            return Ok(order);
+        }
+        // Every unordered entity has an unordered live dep, so walking unordered deps
+        // from any of them must revisit an entity: the walk from there is a cycle.
+        let unordered = |id: &EntityId| pending[id] > 0;
+        let start = *pending.keys().find(|id| unordered(id)).expect("some entity is unordered");
+        let mut seen: BTreeMap<EntityId, usize> = BTreeMap::new();
+        let mut walk = Vec::new();
+        let mut at = start;
+        while !seen.contains_key(&at) {
+            seen.insert(at, walk.len());
+            walk.push(at);
+            at = *live_deps[&at].iter().find(|t| unordered(t)).expect("an unordered entity has an unordered dep");
+        }
+        Err(Cycle { path: walk.split_off(seen[&at]) })
+    }
+
+    /// The deps of `id` as a set (see [`Document::deps`]).
+    fn dep_set(&self, id: EntityId) -> BTreeSet<EntityId> {
+        let mut set = BTreeSet::new();
+        if let Some(e) = self.entities.get(&id) {
+            for v in e.props.values() {
+                v.for_each_ref(&mut |t| {
+                    set.insert(t);
+                });
+            }
+        }
+        set
+    }
+}
+
+/// Feeds the unambiguous encoding of `v` to `h`: a type tag, then the payload.
+/// Tags: 0 Num (canonical bits), 1 Text (length-prefixed), 2 Ref (128 bits),
+/// 3 Bool (one byte), 4 List (element count, then each element's encoding).
+fn hash_value(h: &mut Hasher64, v: &Value) {
+    // Iterative, so a deeply nested List cannot overflow the stack.
+    let mut stack = vec![v];
+    while let Some(v) = stack.pop() {
+        match v {
+            Value::Num(x) => {
+                h.byte(0);
+                h.u64(canonical_f64_bits(*x));
+            }
+            Value::Text(s) => {
+                h.byte(1);
+                h.str(s);
+            }
+            Value::Ref(id) => {
+                h.byte(2);
+                h.u128(id.0);
+            }
+            Value::Bool(b) => {
+                h.byte(3);
+                h.byte(u8::from(*b));
+            }
+            Value::List(items) => {
+                h.byte(4);
+                h.u64(items.len() as u64);
+                stack.extend(items.iter().rev());
+            }
+        }
     }
 }
 
@@ -477,5 +705,55 @@ mod tests {
         let e = DocError::NotFound(EntityId(0xab));
         assert!(e.to_string().contains("000000000000000000000000000000ab"));
         let _: &dyn std::error::Error = &e;
+    }
+
+    #[test]
+    fn ulids_parse_and_print() {
+        let u = EntityId::new_ulid(1_469_918_176_385, 0x1234_5678_9abc_def0_1234);
+        assert_eq!(EntityId::parse(&u.to_ulid_string()), u);
+        assert_eq!(EntityId::parse_ulid("01ARYZ6S41TSV4RRFFQ69G5FAV").map(|e| (e.0 >> 80) as u64), Some(1_469_918_176_385));
+        assert_eq!(EntityId::new_ulid(1, u128::MAX), EntityId((1u128 << 80) | ((1u128 << 80) - 1)));
+        for s in ["01aryz6s41tsv4rrffq69g5fav", "01ARYZ6S41TSV4RRFFQ69G5FAI", "81ARYZ6S41TSV4RRFFQ69G5FAV", "é1ARYZ6S41TSV4RRFFQ69G5FA"] {
+            assert_eq!(EntityId::parse(s), EntityId::derive(s), "{s}");
+        }
+    }
+
+    #[test]
+    fn bool_and_list_hash_distinctly_and_deps_see_nested_refs() {
+        let a = doc(vec![create("e", "W"), set("e", "k", Value::List(vec![Value::Bool(true)]))]);
+        let b = doc(vec![create("e", "W"), set("e", "k", Value::Bool(true))]);
+        let c = doc(vec![create("e", "W"), set("e", "k", Value::List(vec![]))]);
+        assert_ne!(a.content_hash(), b.content_hash());
+        assert_ne!(a.content_hash(), c.content_hash());
+        let nested = Value::List(vec![Value::List(vec![Value::Ref(id("x")), Value::Ref(id("y"))]), Value::Ref(id("x"))]);
+        let d = doc(vec![create("e", "W"), create("x", "W"), set("e", "k", nested)]);
+        let mut want = vec![id("x"), id("y")];
+        want.sort();
+        assert_eq!(d.deps(id("e")), want);
+        assert_eq!(d.dependents(id("y")), vec![id("e")]);
+        assert_eq!(d.dangling_refs(), vec![(id("e"), "k".to_string())]);
+        assert_eq!(d.topo_order(), Ok(vec![id("x"), id("e")]));
+    }
+
+    #[test]
+    fn cycles_are_reported_with_a_path() {
+        let d = doc(vec![
+            create("a", "W"),
+            create("b", "W"),
+            create("c", "W"),
+            set("a", "r", Value::Ref(id("b"))),
+            set("b", "r", Value::List(vec![Value::Ref(id("a"))])),
+            set("c", "r", Value::Ref(id("a"))),
+        ]);
+        let cycle = d.topo_order().unwrap_err();
+        let mut members = cycle.path.clone();
+        members.sort();
+        let mut want = vec![id("a"), id("b")];
+        want.sort();
+        assert_eq!(members, want);
+        assert!(cycle.to_string().starts_with("dependency cycle: "));
+        let selfie = doc(vec![create("s", "W"), set("s", "me", Value::Ref(id("s")))]);
+        assert_eq!(selfie.topo_order(), Err(Cycle { path: vec![id("s")] }));
+        assert_eq!(Document::SCHEMA_VERSION, 1);
     }
 }

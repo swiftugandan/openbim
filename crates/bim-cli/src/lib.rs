@@ -3,7 +3,8 @@
 //! | Command | Effect |
 //! |---|---|
 //! | `bim init <dir>` | creates `<dir>/doc.oplog` (the empty journal) unless it already exists |
-//! | `bim apply <dir> <ops-file>` | appends the file's ops (line format, see [`ops`]) to the journal; all or none |
+//! | `bim apply <dir> <ops-file>` | appends the file's ops (`*.json`: JSON ops, else the line format; see [`ops`]) to the journal; all or none |
+//! | `bim show <dir> <id> --json` | prints the entity as `{"id","kind","props"}` (spec/cli.md) |
 //! | `bim hash <dir>` | prints the document's `content_hash` as 16 lowercase hex digits |
 //! | `bim validate <dir>` | prints one `dangling <source> <key> <target>` line per dangling ref; exit 1 if any |
 //! | `bim diff <dirA> <dirB>` | prints `same` (exit 0) or `differ` (exit 1) |
@@ -12,7 +13,8 @@
 //!
 //! * `0` success;
 //! * `1` the command ran and found a problem (`validate` found dangling refs, `diff` found a difference);
-//! * `2` the command could not run: wrong usage, an invalid ops file or op, a missing directory, a
+//! * `2` the command could not run: wrong usage, an invalid ops file or op, an unknown or deleted
+//!   entity for `show`, a missing directory, a
 //!   directory that is not a project, an unreadable or unwritable file, a corrupt journal. Nothing
 //!   is changed;
 //! * `3` internal error (a bug in `bim` itself: a panic).
@@ -24,6 +26,7 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+pub mod json;
 pub mod ops;
 pub mod project;
 
@@ -37,6 +40,7 @@ pub const USAGE: &str = "usage:
   bim init <dir>
   bim apply <dir> <ops-file>
   bim hash <dir>
+  bim show <dir> <id> --json
   bim validate <dir>
   bim diff <dirA> <dirB>";
 
@@ -103,6 +107,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("init") => commands::init(operands, out),
         Some("apply") => commands::apply(operands, out),
         Some("hash") => commands::hash(operands, out),
+        Some("show") => commands::show(operands, out),
         Some("validate") => commands::validate(operands, out),
         Some("diff") => commands::diff(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
