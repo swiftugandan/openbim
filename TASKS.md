@@ -131,7 +131,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim_geom::boolean(a: &Solid, b: &Solid, op: BoolOp) -> Result<Solid, GeomError>` with `BoolOp::{Union, Difference, Intersection}`, exact-predicate classification, handling coplanar faces, shared edges and touching vertices; results are closed 2-manifolds (or empty) with merged coplanar faces. Judge: random boxes, prisms and sweeps, including coplanar/touching cases, volumes vs manifold3d within 1e-9 relative, watertight per trimesh.
   - Details: `boolean` and `BoolOp` are exported at the crate root; `GeomError` derives Debug. `Solid::face_count() -> usize` counts maximal edge-connected coplanar regions (a face may have inner loops). `Difference` is a − b. An empty or zero-volume result is `Ok` with `face_count() == 0`, `volume() == 0`, and `to_stl` writes no facets.
 
-- [ ] T2.3: spatial index: R*-tree and SAH BVH with raycasting
+- [x] T2.3: spatial index: R*-tree and SAH BVH with raycasting
   - Files: Cargo.toml, Cargo.lock, crates/bim-spatial/
   - Opens: T2.1
   - Verification: bash judges/T2.3.sh
