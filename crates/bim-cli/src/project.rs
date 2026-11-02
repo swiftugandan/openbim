@@ -15,13 +15,16 @@
 //! Appending never edits in place: the new journal (the old bytes, verbatim, plus the new lines) is
 //! written to a temporary file in the same directory, synced, and renamed over `doc.oplog`. A
 //! failure or a crash therefore leaves either the old journal or the new one, never a torn line.
-//! The project has a single writer: two `bim apply` runs racing on one project can lose one run's ops.
 //!
 //! **The kind registry** (`bim-schema`) is read from `<dir>/plugins/*/trade.json` every time a project
 //! is opened, so every command that opens one fails (exit 2, naming the file) on a malformed or
 //! inconsistent trade package. The registry is not part of the document and is not applied to the
 //! journal on replay: only `bim apply` checks the ops it is given, so a project whose package was
 //! removed still opens and its entities stay readable.
+//!
+//! Next to the journal sits `bim.sqlite`, the SQLite store ([`crate::store`]): the op log, the
+//! materialized state and the revisions. `bim apply` updates journal and store in one SQLite
+//! transaction ([`Project::apply_ops`]); the journal stays the source of truth for the document.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -29,7 +32,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use bim_doc::{Document, EntityId, Value};
+use bim_doc::{Document, Entity, EntityId, Value};
 use bim_schema::KindRegistry;
 
 use crate::json;
@@ -52,7 +55,9 @@ pub struct Project {
     /// The name each entity was written with in the journal (created, referenced or both).
     names: HashMap<EntityId, String>,
     /// The journal text as read.
-    journal: String,
+    pub(crate) journal: String,
+    /// The journal's ops in order, blank lines skipped: what replaying it applied.
+    pub(crate) ops: Vec<LineOp>,
 }
 
 /// A prop holding a ref to an entity that is not in the document.
@@ -140,13 +145,15 @@ impl Project {
         let parsed = ops::parse_text(&journal).map_err(|e| corrupt(e.line, &e.reason))?;
         let mut doc = Document::new();
         let mut names = HashMap::new();
-        for Located { line, op } in &parsed {
-            op.apply_to(&mut doc).map_err(|e| corrupt(*line, &op.describe_error(&e)))?;
+        let mut ops = Vec::with_capacity(parsed.len());
+        for Located { line, op } in parsed {
+            op.apply_to(&mut doc).map_err(|e| corrupt(line, &op.describe_error(&e)))?;
             for name in op.names() {
                 names.entry(resolve_id(name)).or_insert_with(|| name.to_string());
             }
+            ops.push(op);
         }
-        Ok(Project { dir: dir.to_path_buf(), doc, kinds: KindRegistry::core(), names, journal })
+        Ok(Project { dir: dir.to_path_buf(), doc, kinds: KindRegistry::core(), names, journal, ops })
     }
 
     /// The name to show for `id`: the live entity's `_name` prop, else the name it was written
@@ -215,29 +222,54 @@ impl Project {
 
     /// Appends `ops` to the journal on disk, atomically (see the module docs). Does not check that
     /// the ops apply; the caller has done that. An empty `ops` writes nothing.
+    ///
+    /// This writes the journal only; `bim.sqlite` catches up the next time a command opens the
+    /// store ([`Project::apply_ops`] does both in one transaction, and is what `bim apply` uses).
     pub fn append(&self, ops: &[LineOp]) -> Result<(), CliError> {
         if ops.is_empty() {
             return Ok(());
         }
+        self.ensure_journal_writable()?;
         let path = self.dir.join(OPLOG);
-        // Replacing the file would bypass a read-only journal, which an in-place append would respect.
+        replace_journal(&self.dir, self.appended(ops).as_bytes()).map_err(|e| io_error(&path, &e))
+    }
+
+    /// Fails if `doc.oplog` is read-only: replacing the file would bypass that, which an in-place
+    /// append would respect.
+    pub(crate) fn ensure_journal_writable(&self) -> Result<(), CliError> {
+        let path = self.dir.join(OPLOG);
         if fs::metadata(&path).is_ok_and(|meta| meta.permissions().readonly()) {
             return Err(CliError::Input(format!("{}: journal is read-only", path.display())));
         }
-        replace_journal(&self.dir, self.appended(ops).as_bytes()).map_err(|e| io_error(&path, &e))
+        Ok(())
+    }
+}
+
+/// The name `entity` is shown under in the store and in revision diffs: its `_name` prop, which
+/// every entity `bim` creates carries; for one that lacks it, its 32 hex digits.
+pub(crate) fn shown_name(entity: &Entity) -> String {
+    match entity.props.get(ops::NAME_PROP) {
+        Some(Value::Text(name)) => name.clone(),
+        _ => entity.id.to_string(),
     }
 }
 
 /// Writes `bytes` to a temporary file next to the journal, syncs it, and renames it over the
 /// journal. The temporary file is removed if anything fails. Its name is unique per call, so
 /// concurrent writers (other processes, or other threads of this one) never share a temporary file.
-fn replace_journal(dir: &Path, bytes: &[u8]) -> io::Result<()> {
+/// Once the rename has happened the directory is synced too (best effort), so the new journal is on
+/// disk before anything the caller does next, such as committing a SQLite transaction that
+/// refers to it.
+pub(crate) fn replace_journal(dir: &Path, bytes: &[u8]) -> io::Result<()> {
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let unique = NEXT.fetch_add(1, Ordering::Relaxed);
     let tmp = dir.join(format!("{OPLOG}.{}.{unique}.tmp", std::process::id()));
     let result = write_synced(&tmp, bytes).and_then(|()| fs::rename(&tmp, dir.join(OPLOG)));
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
+    } else if let Ok(handle) = File::open(dir) {
+        // Not every platform can open a directory; where it works, it makes the rename durable.
+        let _ = handle.sync_all();
     }
     result
 }
@@ -248,7 +280,7 @@ fn write_synced(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-fn io_error(path: &Path, error: &io::Error) -> CliError {
+pub(crate) fn io_error(path: &Path, error: &io::Error) -> CliError {
     CliError::Input(format!("{}: {error}", path.display()))
 }
 
