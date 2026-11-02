@@ -1,6 +1,6 @@
 [package]
 name = "bim-struct"
-description = "Structural analysis engine: 2D frame direct-stiffness solver"
+description = "Structural analysis engine: 2D and 3D frame direct-stiffness solvers"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
