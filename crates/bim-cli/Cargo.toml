@@ -1,0 +1,18 @@
+[package]
+name = "bim-cli"
+description = "Headless bim command over the document"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "bim_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "bim"
+path = "src/main.rs"
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
