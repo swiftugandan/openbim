@@ -69,7 +69,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.2.sh
   - Spec: Crate `bim-crdt` (depends on bim-doc). `Replica::new(peer: u32)`; local edits `create(&mut self, id: EntityId, kind: String)`, `set(&mut self, id: EntityId, key: String, value: Value)`, `delete(&mut self, id: EntityId)`, each stamped with a Lamport clock `(counter, peer)`; `merge(&mut self, other: &Replica)` is commutative, associative and idempotent (last-writer-wins per (entity, key) by stamp; delete is a tombstone that wins over a create or set with a lower stamp, and an entity re-created with a higher stamp revives). `document() -> bim_doc::Document` materializes the live state. `diagnostics() -> Vec<ConflictDiagnostic>` reports, without panicking, every live `Ref` whose target is tombstoned or missing: `ConflictDiagnostic { entity: EntityId, key: String, target: EntityId }` (derives Debug, Clone, PartialEq, Eq, PartialOrd, Ord), sorted. Local edits never fail. Liveness: an entity is live iff its greatest create stamp exceeds its greatest delete stamp; a prop is visible iff the entity is live and the prop's stamp exceeds the entity's greatest delete stamp. `Replica` derives Clone.
 
-- [ ] T1.3: bim-solver: 2D geometric constraint solver with DOF analysis
+- [x] T1.3: bim-solver: 2D geometric constraint solver with DOF analysis
   - Files: Cargo.lock, crates/bim-solver/
   - Opens: T1.1
   - Verification: bash judges/T1.3.sh

@@ -12,3 +12,7 @@ dependencies = [
 [[package]]
 name = "bim-doc"
 version = "0.1.0"
+
+[[package]]
+name = "bim-solver"
+version = "0.1.0"
