@@ -8,18 +8,22 @@ use std::path::Path;
 
 use bim_doc::Document;
 use bim_schema::{KindRegistry, SchemaError};
-use bim_store::{Store, STORE_FILE};
+use bim_store::{store_path, Store, STORE_FILE};
+use bim_sync::SyncDb;
 
 use crate::ops::{self, LineOp, Located};
 use crate::json;
 use crate::project::{self, Project};
 use crate::store::{existing_store, store_error};
+use crate::sync;
 use crate::CliError;
 
 type Outcome = Result<u8, CliError>;
 
 /// `bim init <dir>`: creates `<dir>/doc.oplog`, empty, unless it exists, and `<dir>/bim.sqlite`,
-/// an empty store, unless it exists. Records no revision. Prints nothing.
+/// an empty store, unless it exists. The store also records the project's CRDT peer id, a random
+/// 32-bit number drawn once (a copy of the directory shares it). Records no revision. Prints
+/// nothing. Running it again on a set-up project writes nothing.
 pub(crate) fn init(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let [dir] = operands::<1>(args, "init <dir>")?;
     let dir = Path::new(dir);
@@ -30,7 +34,47 @@ pub(crate) fn init(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     }
     project::init(dir)?;
     Store::open_or_create(dir).map_err(|e| store_error(dir, e))?;
+    let unusable = |e| CliError::Input(format!("{}: {e}", store.display()));
+    SyncDb::open_or_create(&store_path(dir)).map_err(unusable)?.ensure_peer().map_err(unusable)?;
     Ok(0)
+}
+
+/// `bim sync serve <dir> --port <p>` serves the project over WebSocket (it prints `listening
+/// <port>` first and runs until killed); `bim sync <dir> <ws-url>` exchanges state with such a
+/// server until both sides hold the same edits, prints nothing and exits 0. If the server cannot
+/// be reached, or anything else goes wrong, the command exits 2 and `<dir>` is as it was (see
+/// [`crate::sync`]).
+///
+/// The serve form is the one that has `--port`: `serve`, `<dir>` and `--port <p>` with `<p>` a port
+/// number from 0 to 65535 (0 picks a free one), the flag before or after the directory.
+pub(crate) fn sync(args: &[OsString], out: &mut dyn Write) -> Outcome {
+    let usage = |what: &str| CliError::Usage(format!("`bim sync serve <dir> --port <p>` or `bim sync <dir> <ws-url>`: {what}"));
+    if args.iter().any(|arg| arg == "--port") {
+        let (mut dir, mut port, mut serve) = (None, None, false);
+        let mut rest = args.iter();
+        while let Some(arg) = rest.next() {
+            if arg == "--port" {
+                let value = rest.next().ok_or_else(|| usage("`--port` needs a port number"))?;
+                let value = value.to_str().and_then(|text| text.parse::<u16>().ok());
+                let value = value.ok_or_else(|| usage("the port must be a number from 0 to 65535"))?;
+                if port.replace(value).is_some() {
+                    return Err(usage("`--port` given twice"));
+                }
+            } else if arg == "serve" && !serve {
+                serve = true;
+            } else if dir.replace(arg).is_some() {
+                return Err(usage("takes one directory"));
+            }
+        }
+        return match (serve, dir, port) {
+            (true, Some(dir), Some(port)) => sync::serve(Path::new(dir), port, out),
+            _ => Err(usage("`--port` goes with `serve <dir>`")),
+        };
+    }
+    let [dir, url] = operands::<2>(args, "sync <dir> <ws-url>")?;
+    let url = url.to_str().ok_or_else(|| CliError::Usage(format!("url `{}` is not valid UTF-8", url.to_string_lossy())))?;
+    bim_sync::parse_ws_url(url).map_err(|e| CliError::Usage(e.to_string()))?;
+    sync::client(Path::new(dir), url)
 }
 
 /// `bim apply <dir> <ops-file>`: appends the file's ops to the journal and the store, all or none.

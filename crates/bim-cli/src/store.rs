@@ -148,6 +148,15 @@ impl Project {
         Ok(())
     }
 
+    /// Brings `bim.sqlite` in step with the journal after `bim sync` appended to it: the same
+    /// reconcile every write starts with, followed by nothing. Takes the store's write lock, so it
+    /// must not be called while a sync transaction is open.
+    pub(crate) fn sync_store(&self) -> Result<(), CliError> {
+        let mut store = self.open_store()?;
+        let txn = self.begin(&mut store)?;
+        txn.commit().map_err(|e| store_error(&self.dir, e))
+    }
+
     /// Records a revision of the document as it is now and returns its id, the document's content
     /// hash as 16 hex digits. The revision lists the ops logged since the previous one.
     pub fn commit_revision(&self, message: &str) -> Result<String, CliError> {
