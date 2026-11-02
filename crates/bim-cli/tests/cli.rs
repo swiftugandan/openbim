@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use bim_cli::json::{self, Json};
 use bim_doc::{Document, EntityId, Op, Value};
+use bim_store::{op_id, Store};
 
 const BIM: &str = env!("CARGO_BIN_EXE_bim");
 
@@ -123,7 +125,7 @@ fn init_creates_an_empty_journal_and_prints_nothing() {
     let run = bim(&[&"init", &dir]).expect(0);
     assert_eq!((run.out.as_str(), run.err.as_str()), ("", ""));
     assert_eq!(journal(&dir), b"");
-    assert_eq!(files_in(&dir), ["doc.oplog"]);
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"]);
     // A freshly initialised project is a valid, empty document.
     bim(&[&"validate", &dir]).expect(0);
     assert_eq!(hash(&dir), hash(&s.project("q", "")));
@@ -310,7 +312,7 @@ fn a_file_with_one_bad_line_is_rejected_whole() {
     assert!(run.err.contains("bad.ops:2:"), "{}", run.err);
     assert!(run.err.contains("unknown op `bogus`"), "{}", run.err);
     assert_eq!((journal(&dir), hash(&dir)), before);
-    assert_eq!(files_in(&dir), ["doc.oplog"], "no temporary file is left behind");
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"], "no temporary file is left behind");
 }
 
 #[test]
@@ -337,7 +339,7 @@ fn an_op_the_document_refuses_rejects_the_whole_file() {
         assert!(run.err.contains("refused.ops"), "{what}: {}", run.err);
         assert_eq!((journal(&dir), hash(&dir)), before, "{what}");
     }
-    assert_eq!(files_in(&dir), ["doc.oplog"]);
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"]);
 }
 
 #[test]
@@ -693,7 +695,7 @@ fn a_read_only_journal_is_not_replaced() {
     let run = run.rejected();
     assert!(run.err.contains("read-only"), "{}", run.err);
     assert_eq!(journal(&dir), before);
-    assert_eq!(files_in(&dir), ["doc.oplog"]);
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"]);
 }
 
 // ---- corrupt journals ---------------------------------------------------------------------
@@ -1035,6 +1037,20 @@ fn usage_errors_exit_2() {
         vec![&"plugin", &"list", &dir, &dir],
         vec![&"plugin", &"remove", &dir],
         vec![&"plugin", &"--json"],
+        vec![&"diff", &dir, &dir, &"--json"],
+        vec![&"diff", &dir, &"0123456789abcdef", &"ABCDEF0123456789", &"--json"],
+        vec![&"diff", &dir, &"0123456789abcdef", &"0123456789abcde", &"--json"],
+        vec![&"diff", &dir, &"0123456789abcdef", &"0123456789abcdeg"],
+        vec![&"commit"],
+        vec![&"commit", &dir],
+        vec![&"commit", &"-m", &"msg"],
+        vec![&"commit", &dir, &"-m"],
+        vec![&"commit", &dir, &dir, &"-m", &"msg"],
+        vec![&"commit", &dir, &"-m", &"a", &"-m", &"b"],
+        vec![&"commit", &dir, &"-m", &"msg", &"--json"],
+        vec![&"log"],
+        vec![&"log", &dir, &dir],
+        vec![&"log", &"--json"],
     ];
     for args in cases {
         let run = bim(&args).rejected();
@@ -1072,4 +1088,488 @@ fn a_stdout_that_cannot_be_written_is_an_error_not_a_panic() {
     let output = Command::new(BIM).args(["hash".as_ref(), dir.as_os_str()]).stdout(full).output().unwrap();
     assert_eq!(output.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&output.stderr).contains("cannot write to standard output"));
+}
+
+// ---- store, commit, log, revision diff (T3.2) -----------------------------------------------
+
+/// One entry of `bim log --json`.
+#[derive(Debug, PartialEq)]
+struct Rev {
+    rev: String,
+    message: String,
+    ops: Vec<String>,
+}
+
+fn strings(value: &Json) -> Vec<String> {
+    let Json::Array(items) = value else { panic!("not an array: {value:?}") };
+    items.iter().map(|item| if let Json::Str(s) = item { s.clone() } else { panic!("not a string: {item:?}") }).collect()
+}
+
+fn member<'a>(object: &'a Json, name: &str) -> &'a Json {
+    let Json::Object(members) = object else { panic!("not an object: {object:?}") };
+    &members.iter().find(|(key, _)| key == name).unwrap_or_else(|| panic!("no member {name}")).1
+}
+
+fn log(dir: &Path) -> Vec<Rev> {
+    let run = bim(&[&"log", &dir, &"--json"]).expect(0);
+    assert_eq!(run.err, "");
+    let text = run.out.strip_suffix('\n').expect("one line");
+    assert!(!text.contains('\n'));
+    let Json::Array(entries) = json::parse(text).expect("log prints JSON") else { panic!("log is not an array") };
+    entries
+        .iter()
+        .map(|entry| {
+            let Json::Str(rev) = member(entry, "rev") else { panic!("rev") };
+            let Json::Str(message) = member(entry, "message") else { panic!("message") };
+            Rev { rev: rev.clone(), message: message.clone(), ops: strings(member(entry, "ops")) }
+        })
+        .collect()
+}
+
+fn commit(dir: &Path, message: &str) -> String {
+    let run = bim(&[&"commit", &dir, &"-m", &message]).expect(0);
+    assert_eq!(run.err, "");
+    let rev = run.out.strip_suffix('\n').expect("one line").to_string();
+    assert_eq!(rev, hash(dir), "a revision id is the content hash");
+    rev
+}
+
+fn store_bytes(dir: &Path) -> Vec<u8> {
+    fs::read(dir.join("bim.sqlite")).unwrap()
+}
+
+fn ids(lines: &[&str]) -> Vec<String> {
+    lines.iter().map(|line| op_id(line)).collect()
+}
+
+/// `bim diff <dir> <a> <b> --json` with its exit code, parsed as (added, removed, changed).
+fn rev_diff(dir: &Path, a: &str, b: &str, code: i32) -> (Vec<String>, Vec<String>, Vec<(String, Vec<String>)>) {
+    let run = bim(&[&"diff", &dir, &a, &b, &"--json"]).expect(code);
+    assert_eq!(run.err, "");
+    let doc = json::parse(run.out.strip_suffix('\n').expect("one line")).expect("JSON");
+    let Json::Array(changed) = member(&doc, "changed") else { panic!("changed") };
+    let changed = changed.iter().map(|c| {
+        let Json::Str(id) = member(c, "id") else { panic!("id") };
+        (id.clone(), strings(member(c, "keys")))
+    });
+    (strings(member(&doc, "added")), strings(member(&doc, "removed")), changed.collect())
+}
+
+#[test]
+fn init_creates_a_sqlite_store_next_to_the_journal() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    assert!(store_bytes(&dir).starts_with(b"SQLite format 3\0"));
+    assert_eq!(log(&dir), []);
+    // init is idempotent: the store is not rewritten ...
+    let before = store_bytes(&dir);
+    bim(&[&"init", &dir]).expect(0);
+    assert_eq!(store_bytes(&dir), before);
+    // ... and a project that predates the store gets one, with the journal left as it was.
+    let old = s.path("old");
+    fs::create_dir(&old).unwrap();
+    fs::write(old.join("doc.oplog"), "create a Wall\n").unwrap();
+    bim(&[&"init", &old]).expect(0);
+    assert!(store_bytes(&old).starts_with(b"SQLite format 3\0"));
+    assert_eq!(journal(&old), b"create a Wall\n");
+    // The store is where `init` records no revision.
+    assert_eq!(log(&old), []);
+    // init still refuses a path that cannot be a project, and then creates no store.
+    let blocked = s.path("blocked");
+    fs::create_dir_all(blocked.join("doc.oplog")).unwrap();
+    bim(&[&"init", &blocked]).rejected();
+    assert!(!blocked.join("bim.sqlite").exists());
+    // Likewise when something that is not a file stands where the store goes: nothing is created.
+    let obstructed = s.path("obstructed");
+    fs::create_dir_all(obstructed.join("bim.sqlite")).unwrap();
+    let run = bim(&[&"init", &obstructed]).rejected();
+    assert!(run.err.contains("bim.sqlite") && run.err.contains("not a file"), "{}", run.err);
+    assert_eq!(files_in(&obstructed), ["bim.sqlite"]);
+}
+
+#[test]
+fn commit_prints_the_content_hash_and_log_lists_revisions_oldest_first() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    let empty = commit(&dir, "empty");
+    bim(&[&"apply", &dir, &s.write("1.ops", A_OPS)]).expect(0);
+    let first = commit(&dir, "first");
+    bim(&[&"apply", &dir, &s.write("2.ops", "set wall height num 4\ncreate door Opening\n")]).expect(0);
+    let message = "second: \"quoted\", back\\slash, ünïcode, tab\tand spaces";
+    let second = commit(&dir, message);
+    assert_eq!(empty, hash(&s.project("q", "")), "an empty document's revision");
+    let all = log(&dir);
+    assert_eq!(all.iter().map(|r| r.rev.as_str()).collect::<Vec<_>>(), [empty.as_str(), &first, &second]);
+    assert_eq!(all.iter().map(|r| r.message.as_str()).collect::<Vec<_>>(), ["empty", "first", message]);
+    assert_eq!(all[0].ops, Vec::<String>::new());
+    assert_eq!(
+        all[1].ops,
+        ids(&[
+            "create wall Wall",
+            "create lvl Level",
+            "set wall height num 3.5",
+            "set wall host ref lvl",
+            "set wall name text north"
+        ])
+    );
+    assert_eq!(all[2].ops, ids(&["set wall height num 4.0", "create door Opening"]));
+    // Everything is one line of JSON with 16-hex ids, whatever the message holds.
+    for rev in all.iter().flat_map(|r| std::iter::once(&r.rev).chain(&r.ops)) {
+        assert!(rev.len() == 16 && rev.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)), "{rev}");
+    }
+    // `--json` is optional for log, and may stand anywhere.
+    let plain = bim(&[&"log", &dir]).expect(0).out;
+    assert_eq!(plain, bim(&[&"log", &dir, &"--json"]).expect(0).out);
+    assert_eq!(plain, bim(&[&"log", &"--json", &dir]).expect(0).out);
+    // The message may come before the directory too, and be empty.
+    let third = bim(&[&"commit", &"-m", &"", &dir]).expect(0).out;
+    assert_eq!(third.trim_end(), second);
+    assert_eq!(log(&dir)[3].message, "");
+}
+
+#[test]
+fn op_ids_are_content_addressed_by_the_canonical_op_text() {
+    let s = Scratch::new();
+    let (a, b) = (s.project("a", ""), s.project("b", ""));
+    // The same ops, written differently, in two projects: the same ids.
+    bim(&[&"apply", &a, &s.write("a.ops", "create  w\tWall\r\n\r\n set w  h num 3\n")]).expect(0);
+    bim(&[&"apply", &b, &s.write("b.json", r#"{"schema":1,"ops":[{"op":"create","id":"w","kind":"Wall","props":{"h":3}}]}"#)]).expect(0);
+    commit(&a, "a");
+    commit(&b, "b");
+    let want = ids(&["create w Wall", "set w h num 3.0"]);
+    assert_eq!(log(&a)[0].ops, want);
+    assert_eq!(log(&b)[0].ops, want);
+    // An op with no word form is hashed in its JSON form.
+    bim(&[&"apply", &a, &s.write("c.json", r#"{"schema":1,"ops":[{"op":"set","id":"w","key":"label","value":"two words"}]}"#)]).expect(0);
+    commit(&a, "c");
+    assert_eq!(log(&a)[1].ops, ids(&[r#"{"op":"set","id":"w","key":"label","value":"two words"}"#]));
+    // An op applied twice has one id both times: the log lists it twice, the store keeps it once.
+    bim(&[&"apply", &a, &s.write("d.ops", "set w h num 4\nset w h num 3\nset w h num 4\n")]).expect(0);
+    commit(&a, "d");
+    let four = op_id("set w h num 4.0");
+    assert_eq!(log(&a)[2].ops, [four.clone(), op_id("set w h num 3.0"), four]);
+}
+
+#[test]
+fn committing_without_changes_still_records_a_revision() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let first = commit(&dir, "one");
+    let again = commit(&dir, "two");
+    assert_eq!(first, again);
+    let all = log(&dir);
+    assert_eq!((all.len(), all[1].message.as_str(), all[1].ops.len()), (2, "two", 0));
+    assert_eq!(all[0].ops.len(), 5);
+    // Going back to an earlier document reproduces its revision id.
+    bim(&[&"apply", &dir, &s.write("x.ops", "set wall height num 9\n")]).expect(0);
+    let changed = commit(&dir, "changed");
+    assert_ne!(changed, first);
+    bim(&[&"apply", &dir, &s.write("y.ops", "set wall height num 3.5\n")]).expect(0);
+    assert_eq!(commit(&dir, "reverted"), first);
+    assert_eq!(log(&dir).len(), 4);
+    rev_diff(&dir, &first, &first, 0);
+    assert_eq!(rev_diff(&dir, &changed, &first, 1).2, [("wall".to_string(), vec!["height".to_string()])]);
+}
+
+#[test]
+fn a_rejected_apply_changes_neither_the_log_nor_the_store() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    commit(&dir, "first");
+    let before = (store_bytes(&dir), journal(&dir), bim(&[&"log", &dir]).expect(0).out);
+    let cases = [
+        ("a bad line", "set wall height num 4\nbogus op here\n"),
+        ("a refused op", "set wall height num 4\nset ghost x num 1\n"),
+        ("a duplicate create", "create fresh W\ncreate fresh W\n"),
+        ("a reserved key", "set wall _name text evil\n"),
+    ];
+    for (what, text) in cases {
+        bim(&[&"apply", &dir, &s.write("bad.ops", text)]).rejected();
+        let after = (store_bytes(&dir), journal(&dir), bim(&[&"log", &dir]).expect(0).out);
+        assert_eq!(after, before, "{what}");
+    }
+    // A file with no ops does not touch the store either.
+    bim(&[&"apply", &dir, &s.write("blank.ops", "\n  \n")]).expect(0);
+    assert_eq!((store_bytes(&dir), journal(&dir)), (before.0.clone(), before.1.clone()));
+}
+
+#[test]
+fn revision_diffs_name_entities_and_the_keys_that_changed() {
+    let s = Scratch::new();
+    let dir = s.project("p", "create L1 Level\nset L1 elevation num 0\ncreate W1 Wall\nset W1 height num 3\ncreate W3 Wall\n");
+    let one = commit(&dir, "one");
+    bim(&[&"apply", &dir, &s.write("2.ops", "set W1 height num 3.5\nset W1 name text north\ncreate W2 Wall\ndelete W3\nset L1 elevation num -0\n")]).expect(0);
+    let two = commit(&dir, "two");
+    // The exact text: one line, ids sorted, keys sorted.
+    let run = bim(&[&"diff", &dir, &one, &two, &"--json"]).expect(1);
+    assert_eq!(run.out, "{\"added\":[\"W2\"],\"removed\":[\"W3\"],\"changed\":[{\"id\":\"W1\",\"keys\":[\"height\",\"name\"]}]}\n");
+    // `-0` and `0` are one number: L1 did not change. The other way round swaps added and removed.
+    let (added, removed, changed) = rev_diff(&dir, &two, &one, 1);
+    assert_eq!((added, removed), (vec!["W3".to_string()], vec!["W2".to_string()]));
+    assert_eq!(changed, [("W1".to_string(), vec!["height".to_string(), "name".to_string()])]);
+    // `--json` may stand anywhere, and the output is the same without it.
+    assert_eq!(bim(&[&"diff", &"--json", &dir, &one, &two]).expect(1).out, run.out);
+    assert_eq!(bim(&[&"diff", &dir, &one, &two]).expect(1).out, run.out);
+    // A revision never differs from itself: exit 0 and an empty document.
+    let same = bim(&[&"diff", &dir, &two, &two, &"--json"]).expect(0);
+    assert_eq!(same.out, "{\"added\":[],\"removed\":[],\"changed\":[]}\n");
+    // Names with characters JSON must escape.
+    bim(&[&"apply", &dir, &s.write("3.json", r#"{"schema":1,"ops":[{"op":"create","id":"q \"1\"","kind":"Wall","props":{"a b":1}}]}"#)]).expect(0);
+    let three = commit(&dir, "three");
+    assert_eq!(rev_diff(&dir, &two, &three, 1).0, ["q \"1\""]);
+    // A kind that changed shows as `_kind`.
+    bim(&[&"apply", &dir, &s.write("4.ops", "delete W1\ncreate W1 Slab\nset W1 height num 3.5\nset W1 name text north\n")]).expect(0);
+    let four = commit(&dir, "four");
+    assert_eq!(rev_diff(&dir, &three, &four, 1).2, [("W1".to_string(), vec!["_kind".to_string()])]);
+}
+
+#[test]
+fn revision_diff_errors_exit_2_and_say_why() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let rev = commit(&dir, "one");
+    let unknown = "0123456789abcdef";
+    for (a, b) in [(rev.as_str(), unknown), (unknown, rev.as_str()), (unknown, unknown)] {
+        let run = bim(&[&"diff", &dir, &a, &b, &"--json"]).rejected();
+        assert!(run.err.contains(&format!("unknown revision `{unknown}`")), "{}", run.err);
+        assert!(!run.err.contains("usage:"), "{}", run.err);
+    }
+    // Not a revision id at all: a usage error, and nothing is looked up.
+    for bad in ["x", "0123456789ABCDEF", "0123456789abcde", "0123456789abcdef0", "", "wall"] {
+        let run = bim(&[&"diff", &dir, &bad, &rev, &"--json"]).rejected();
+        assert!(run.err.contains("usage:") && run.err.contains("not a revision id"), "{bad}: {}", run.err);
+    }
+    // A directory that is not a project, and a project that never had a store.
+    bim(&[&"diff", &s.path("missing"), &rev, &rev, &"--json"]).rejected();
+    let bare = s.path("bare");
+    fs::create_dir(&bare).unwrap();
+    bim(&[&"diff", &bare, &rev, &rev, &"--json"]).rejected();
+    let old = s.path("old");
+    fs::create_dir(&old).unwrap();
+    fs::write(old.join("doc.oplog"), "").unwrap();
+    let run = bim(&[&"diff", &old, &rev, &rev, &"--json"]).rejected();
+    assert!(run.err.contains("unknown revision"), "{}", run.err);
+    assert!(!old.join("bim.sqlite").exists(), "reading revisions never creates the store");
+    // The two-directory form is still there, and takes no --json.
+    bim(&[&"diff", &dir, &dir]).expect(0);
+    bim(&[&"diff", &dir, &dir, &"--json"]).rejected();
+}
+
+#[test]
+fn log_and_the_read_commands_never_create_or_change_the_store() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    commit(&dir, "one");
+    let (store, journal_before) = (store_bytes(&dir), journal(&dir));
+    let modified = fs::metadata(dir.join("bim.sqlite")).unwrap().modified().unwrap();
+    for args in [
+        vec![&"hash" as &dyn AsRef<OsStr>, &dir],
+        vec![&"validate", &dir],
+        vec![&"show", &dir, &"wall", &"--json"],
+        vec![&"diff", &dir, &dir],
+        vec![&"log", &dir, &"--json"],
+    ] {
+        bim(&args).expect(0);
+    }
+    assert_eq!(store_bytes(&dir), store);
+    assert_eq!(journal(&dir), journal_before);
+    assert_eq!(fs::metadata(dir.join("bim.sqlite")).unwrap().modified().unwrap(), modified);
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"], "no journal file, no temporary file");
+    // A project without a store: reading creates none, `log` is empty.
+    let old = s.path("old");
+    fs::create_dir(&old).unwrap();
+    fs::write(old.join("doc.oplog"), A_OPS).unwrap();
+    for args in [
+        vec![&"hash" as &dyn AsRef<OsStr>, &old],
+        vec![&"validate", &old],
+        vec![&"show", &old, &"wall", &"--json"],
+        vec![&"diff", &old, &dir],
+        vec![&"log", &old, &"--json"],
+    ] {
+        bim(&args).expect(0);
+    }
+    assert_eq!(files_in(&old), ["doc.oplog"]);
+    assert_eq!(bim(&[&"log", &old]).expect(0).out, "[]\n");
+}
+
+#[test]
+fn commit_rebuilds_a_missing_store_from_the_journal() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    commit(&dir, "before");
+    fs::remove_file(dir.join("bim.sqlite")).unwrap();
+    assert_eq!(bim(&[&"log", &dir]).expect(0).out, "[]\n", "the revisions went with the file");
+    let rev = commit(&dir, "after");
+    assert_eq!(rev, hash(&dir));
+    let all = log(&dir);
+    assert_eq!(all.len(), 1);
+    assert_eq!(all[0].ops, ids(&[
+        "create wall Wall", "create lvl Level", "set wall height num 3.5", "set wall host ref lvl", "set wall name text north",
+    ]));
+    // apply works on a project whose store was deleted, too, and keeps both in step.
+    fs::remove_file(dir.join("bim.sqlite")).unwrap();
+    bim(&[&"apply", &dir, &s.write("more.ops", "set wall height num 4\n")]).expect(0);
+    commit(&dir, "again");
+    assert_eq!(log(&dir)[0].ops.len(), 6, "the journal's five ops and the new one");
+    assert_state_matches_journal(&dir);
+}
+
+/// The store's state equals the document the journal replays to.
+fn assert_state_matches_journal(dir: &Path) {
+    let project = bim_cli::project::Project::open(dir).unwrap();
+    let state = Store::open_existing(dir).unwrap().expect("a store").state().unwrap();
+    assert_eq!(state.len(), project.doc.len());
+    for entity in project.doc.entities() {
+        let row = &state[&bim_store::entity_key(entity.id)];
+        assert_eq!(row.kind, entity.kind);
+        assert_eq!(row.name, project.name(entity.id));
+        assert_eq!(row.props.len(), entity.props.len());
+        for (key, value) in &entity.props {
+            let mut text = String::new();
+            bim_store::encode_value(value, &mut text);
+            assert_eq!(row.props[key], text, "{key}");
+        }
+    }
+}
+
+#[test]
+fn a_journal_ahead_of_the_store_is_caught_up_by_the_next_write() {
+    // What a process killed between the journal rename and the SQLite commit leaves behind.
+    let s = Scratch::new();
+    let dir = s.project("p", "create a Wall\nset a h num 1\n");
+    let behind = store_bytes(&dir);
+    fs::write(dir.join("doc.oplog"), "create a Wall\nset a h num 1.0\nset a h num 2.0\ncreate b Wall\n").unwrap();
+    assert_eq!(store_bytes(&dir), behind);
+    bim(&[&"apply", &dir, &s.write("more.ops", "set b h num 3\n")]).expect(0);
+    assert_state_matches_journal(&dir);
+    let rev = commit(&dir, "caught up");
+    assert_eq!(rev, hash(&dir));
+    assert_eq!(
+        log(&dir)[0].ops,
+        ids(&["create a Wall", "set a h num 1.0", "set a h num 2.0", "create b Wall", "set b h num 3.0"])
+    );
+    // And a commit alone catches up as well.
+    fs::write(dir.join("doc.oplog"), "create a Wall\nset a h num 1.0\nset a h num 2.0\ncreate b Wall\nset b h num 3.0\ndelete a\n").unwrap();
+    commit(&dir, "after a delete");
+    assert_state_matches_journal(&dir);
+    assert_eq!(log(&dir)[1].ops, ids(&["delete a"]));
+}
+
+#[test]
+fn a_hand_rewritten_journal_is_followed_by_the_store() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let old = commit(&dir, "old");
+    fs::write(dir.join("doc.oplog"), "create other Slab\nset other t num 0.2\n").unwrap();
+    bim(&[&"apply", &dir, &s.write("more.ops", "set other t num 0.3\n")]).expect(0);
+    assert_state_matches_journal(&dir);
+    let new = commit(&dir, "new");
+    assert_ne!(old, new);
+    let all = log(&dir);
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].ops.len(), 5, "the old revision keeps its ops");
+    // The diff between them uses the snapshots, not a replay of any journal.
+    let (added, removed, _) = rev_diff(&dir, &old, &new, 1);
+    assert_eq!((added, removed), (vec!["other".to_string()], vec!["lvl".to_string(), "wall".to_string()]));
+}
+
+#[test]
+fn a_broken_store_stops_the_store_commands_and_nothing_else() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    fs::write(dir.join("bim.sqlite"), "this is not a database, only text, but long enough to be read as one").unwrap();
+    let journal_before = journal(&dir);
+    for args in [
+        vec![&"apply" as &dyn AsRef<OsStr>, &dir, &s.write("m.ops", "set wall height num 4\n")],
+        vec![&"commit", &dir, &"-m", &"x"],
+        vec![&"log", &dir, &"--json"],
+        vec![&"diff", &dir, &"0123456789abcdef", &"0123456789abcdef", &"--json"],
+    ] {
+        let run = bim(&args).rejected();
+        assert!(run.err.contains("bim.sqlite"), "{}", run.err);
+    }
+    assert_eq!(journal(&dir), journal_before, "a failed store write leaves the journal alone");
+    // The journal is the document: the read commands do not care about the store.
+    bim(&[&"hash", &dir]).expect(0);
+    bim(&[&"validate", &dir]).expect(0);
+    bim(&[&"diff", &dir, &dir]).expect(0);
+    // A directory where the store should be is just as unusable.
+    fs::remove_file(dir.join("bim.sqlite")).unwrap();
+    fs::create_dir(dir.join("bim.sqlite")).unwrap();
+    bim(&[&"apply", &dir, &s.write("m2.ops", "set wall height num 4\n")]).rejected();
+    bim(&[&"log", &dir]).rejected();
+    assert_eq!(journal(&dir), journal_before);
+}
+
+#[test]
+fn a_corrupt_journal_stops_commit_and_log_too() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    commit(&dir, "ok");
+    fs::write(dir.join("doc.oplog"), "create a Wall\ngarbage\n").unwrap();
+    let rev = "0123456789abcdef";
+    for args in [
+        vec![&"commit" as &dyn AsRef<OsStr>, &dir, &"-m", &"x"],
+        vec![&"log", &dir],
+        vec![&"diff", &dir, &rev, &rev, &"--json"],
+    ] {
+        let run = bim(&args).rejected();
+        assert!(run.err.contains(":2: corrupt journal"), "{}", run.err);
+    }
+    assert_eq!(journal(&dir), b"create a Wall\ngarbage\n");
+}
+
+#[test]
+fn a_project_directory_named_like_a_sqlite_uri_is_just_a_directory() {
+    // SQLite reads a file name that starts with `file:` as a URI: `file:p?mode=memory/bim.sqlite`
+    // would be a malformed request for the file `p`. The store must open it as a plain path.
+    let s = Scratch::new();
+    let in_scratch = |args: &[&str]| {
+        let output = Command::new(BIM).args(args).current_dir(&s.0).output().unwrap();
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {}", String::from_utf8_lossy(&output.stderr));
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let dir = "file:p?mode=memory";
+    in_scratch(&["init", dir]);
+    fs::write(s.path("ops.txt"), "create a Wall\n").unwrap();
+    in_scratch(&["apply", dir, "ops.txt"]);
+    let rev = in_scratch(&["commit", dir, "-m", "uri"]);
+    assert_eq!(files_in(&s.path(dir)), ["bim.sqlite", "doc.oplog"]);
+    assert_eq!(files_in(&s.0), [dir, "ops.txt"], "nothing else was created next to it");
+    assert!(in_scratch(&["log", dir]).contains(rev.trim_end()));
+}
+
+#[test]
+fn concurrent_applies_never_lose_or_tear_anything() {
+    let s = Scratch::new();
+    let dir = s.project("p", "create a Wall\n");
+    let files: Vec<PathBuf> =
+        (0..8).map(|i| s.write(&format!("w{i}.ops"), format!("create w{i} Wall\nset w{i} h num {i}\n"))).collect();
+    let runs: Vec<Run> = std::thread::scope(|scope| {
+        let handles: Vec<_> = files.iter().map(|file| scope.spawn(|| bim(&[&"apply", &dir, file]))).collect();
+        handles.into_iter().map(|handle| handle.join().unwrap()).collect()
+    });
+    let journal_text = String::from_utf8(journal(&dir)).unwrap();
+    let mut won = 0;
+    for (i, run) in runs.iter().enumerate() {
+        let landed = journal_text.contains(&format!("create w{i} Wall\nset w{i} h num {i}.0\n"));
+        match run.code {
+            0 => {
+                won += 1;
+                assert!(landed, "w{i} exited 0 but its ops are not in the journal");
+            }
+            // A writer that lost the race changes nothing and says so (exit 2, never 3).
+            2 => {
+                assert!(!landed, "w{i} exited 2 but its ops are in the journal");
+                assert!(run.err.contains("changed while") || run.err.contains("locked"), "{}", run.err);
+            }
+            other => panic!("w{i} exited {other}: {}", run.err),
+        }
+    }
+    assert!(won >= 1, "some writer must win");
+    assert_eq!(journal_text.lines().count(), 1 + 2 * won, "no op lost, none twice");
+    assert_state_matches_journal(&dir);
+    commit(&dir, "all");
+    assert_eq!(log(&dir)[0].ops.len(), 1 + 2 * won);
+    assert_eq!(files_in(&dir), ["bim.sqlite", "doc.oplog"]);
 }

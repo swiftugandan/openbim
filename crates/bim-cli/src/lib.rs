@@ -2,12 +2,15 @@
 //!
 //! | Command | Effect |
 //! |---|---|
-//! | `bim init <dir>` | creates `<dir>/doc.oplog` (the empty journal) unless it already exists |
-//! | `bim apply <dir> <ops-file>` | appends the file's ops (`*.json`: JSON ops, else the line format; see [`ops`]) to the journal; all or none. A create of a kind that is neither core nor declared by a trade package, and a create or set that breaks an extension kind's prop declarations, are refused |
+//! | `bim init <dir>` | creates `<dir>/doc.oplog` (the empty journal) and `<dir>/bim.sqlite` (the empty store) unless they already exist |
+//! | `bim apply <dir> <ops-file>` | appends the file's ops (`*.json`: JSON ops, else the line format; see [`ops`]) to the journal and the store, in one SQLite transaction; all or none. A create of a kind that is neither core nor declared by a trade package, and a create or set that breaks an extension kind's prop declarations, are refused |
 //! | `bim show <dir> <id> --json` | prints the entity as `{"id","kind","props"}` (spec/cli.md) |
 //! | `bim hash <dir>` | prints the document's `content_hash` as 16 lowercase hex digits |
 //! | `bim validate <dir>` | prints one `dangling <source> <key> <target>` line per dangling ref; exit 1 if any |
+//! | `bim commit <dir> -m <msg>` | records a revision and prints its id, the content hash at that moment |
+//! | `bim log <dir> --json` | prints `[{"rev","message","ops"}]`, oldest revision first, `ops` the ids of the ops recorded since the previous one |
 //! | `bim diff <dirA> <dirB>` | prints `same` (exit 0) or `differ` (exit 1) |
+//! | `bim diff <dir> <revA> <revB> --json` | prints `{"added","removed","changed"}` between two revisions; exit 0 if they hold the same document, else 1 |
 //! | `bim plugin list <dir> --json` | prints the trade packages in `<dir>/plugins` and the core kinds (spec/cli.md) |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
@@ -15,15 +18,17 @@
 //! * `0` success;
 //! * `1` the command ran and found a problem (`validate` found dangling refs, `diff` found a difference);
 //! * `2` the command could not run: wrong usage, an invalid ops file or op (an undeclared kind or a
-//!   broken extension prop included), an unknown or deleted entity for `show`, a missing directory, a
+//!   broken extension prop included), an unknown or deleted entity for `show`, an unknown revision, a missing directory, a
 //!   directory that is not a project, a malformed or inconsistent trade package, an unreadable or
-//!   unwritable file, a corrupt journal. Nothing is changed;
+//!   unwritable file, a corrupt journal, an unusable store. Nothing is changed;
 //! * `3` internal error (a bug in `bim` itself: a panic).
 //!
 //! The project directory holds a text journal, `doc.oplog` (see [`project`]); every command rebuilds
 //! the [`bim_doc::Document`] by replaying it. Every command that reads `<dir>` first loads the trade
 //! packages in `<dir>/plugins/*/trade.json` into a [`bim_schema::KindRegistry`]; a package that is
-//! malformed or inconsistent makes the command exit 2, naming its `trade.json`. [`run`] is the whole
+//! malformed or inconsistent makes the command exit 2, naming its `trade.json`. Next to the journal, `bim.sqlite` ([`store`]) holds the
+//! content-addressed op log, the state and the revisions; only the commands that write to it
+//! (`apply`, `commit`) or read revisions (`log`, `diff <dir> <revA> <revB>`) open it. [`run`] is the whole
 //! program, so tests (and other front ends) can drive it without spawning a process.
 
 #![forbid(unsafe_code)]
@@ -32,6 +37,7 @@ mod commands;
 pub mod json;
 pub mod ops;
 pub mod project;
+pub mod store;
 
 use std::ffi::OsString;
 use std::fmt;
@@ -45,7 +51,10 @@ pub const USAGE: &str = "usage:
   bim hash <dir>
   bim show <dir> <id> --json
   bim validate <dir>
+  bim commit <dir> -m <msg>
+  bim log <dir> --json
   bim diff <dirA> <dirB>
+  bim diff <dir> <revA> <revB> --json
   bim plugin list <dir> --json";
 
 /// Why a command did not run to completion.
@@ -113,6 +122,8 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("hash") => commands::hash(operands, out),
         Some("show") => commands::show(operands, out),
         Some("validate") => commands::validate(operands, out),
+        Some("commit") => commands::commit(operands, out),
+        Some("log") => commands::log(operands, out),
         Some("diff") => commands::diff(operands, out),
         Some("plugin") => commands::plugin(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
@@ -195,7 +206,7 @@ mod tests {
 
     #[test]
     fn usage_errors_exit_2_with_usage_on_stderr_only() {
-        let cases: [&[&str]; 17] = [
+        let cases: [&[&str]; 26] = [
             &[],
             &["frobnicate"],
             &["--help"],
@@ -213,6 +224,15 @@ mod tests {
             &["plugin", "list"],
             &["plugin", "list", "a", "b"],
             &["plugin", "remove", "a"],
+            &["diff", "a", "b", "--json"],
+            &["diff", "a", "0123456789abcdef", "0123456789abcdeg", "--json"],
+            &["commit"],
+            &["commit", "dir"],
+            &["commit", "-m", "msg"],
+            &["commit", "dir", "-m"],
+            &["commit", "dir", "-m", "a", "-m", "b"],
+            &["log"],
+            &["log", "a", "b"],
         ];
         for args in cases {
             let (code, out, err) = run_str(args);
