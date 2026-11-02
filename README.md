@@ -38,8 +38,9 @@ bash loop/run.sh         # run the loop from a clean, pushed main (PARALLEL=4, R
 bash loop/watch.sh       # dashboard for local sessions, in a second terminal; .loop/events.log covers cloud ones
 ```
 
-Cloud sessions need the Claude GitHub App on this repo and a cloud environment (`CLOUD_ENV`) with full network access,
-`BASH_DEFAULT_TIMEOUT_MS=900000`, `BASH_MAX_TIMEOUT_MS=900000` and `loop/cloud-env-setup.sh` as its setup script.
+Cloud sessions need the Claude GitHub App on this repo and a cloud environment used only for this project (`CLOUD_ENV`,
+named `openbim-build`) with full network access, `BASH_DEFAULT_TIMEOUT_MS=900000`, `BASH_MAX_TIMEOUT_MS=900000` and
+`loop/cloud-env-setup.sh` as its setup script.
 `touch .loop/stop` stops new sessions and lets running ones finish.
 
 Contracts live in `spec/` (schema, CLI, MCP, plugins, web).

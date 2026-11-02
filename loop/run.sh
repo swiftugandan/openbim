@@ -14,7 +14,7 @@ RUNNER=${RUNNER:-cloud}                # cloud | local (local runs every task he
 PARALLEL=${PARALLEL:-4}                # cloud sessions at once
 CLOUD_TIMEOUT=${CLOUD_TIMEOUT:-7200}   # seconds before a cloud session counts as a failed attempt
 POLL=${POLL:-60}                       # seconds between checks of in-flight branches
-CLOUD_ENV=${CLOUD_ENV:-env_01WDsybJaV6wTbYS2xYm8P6S}  # the cloud environment holding loop/cloud-env-setup.sh
+CLOUD_ENV=${CLOUD_ENV:-env_01BpHcnvu9sLjWWCLHVgChPt}  # the cloud environment holding loop/cloud-env-setup.sh
 # Tasks the cloud cannot judge: GPU and frame-time gates, Chrome-driven UI judges, the git-ignored IFC corpus.
 LOCAL_TASKS=${LOCAL_TASKS:-'^T(5\.4|7\.3|7\.5|8\..+)$'}
 mkdir -p .loop/sessions .loop/verdict .loop/attempts .loop/rebases .loop/inflight .loop/probes
