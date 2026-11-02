@@ -14,6 +14,7 @@ name = "bim-crdt"
 version = "0.1.0"
 dependencies = [
  "bim-doc",
+ "bim-solver",
 ]
 
 [[package]]
