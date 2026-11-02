@@ -13,7 +13,7 @@ python_oracles() {
   uv pip install -q --python "$P/py/bin/python" \
     ifcopenshell==0.9.0.post1 ezdxf==1.4.5 pypdf==6.21.4 manifold3d==3.5.4 trimesh==5.2.0 \
     shapely==2.2.0 pynitefea==3.2.1 wntr==1.5.0 python-solvespace==3.0.8 xmlschema==4.3.2 \
-    websockets==17.4 networkx==3.7 rtree==1.4.1 numpy==2.5.4 scipy==1.18.1
+    websockets==17.4 networkx==3.7 rtree==1.4.1 numpy==2.5.4 scipy==1.18.1 six==1.17.0
   "$P/py/bin/python" -c "import ifcopenshell, ezdxf, pypdf, manifold3d, trimesh, shapely, Pynite, wntr, python_solvespace, xmlschema, websockets, networkx"
 }
 
