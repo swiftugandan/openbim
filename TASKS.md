@@ -82,7 +82,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.4.sh
   - Spec: Crate `bim-struct` at crates/engines/structural (the T1.1 workspace glob already includes it). `Frame::new()`, `add_node(x, y) -> usize`, `add_member(i, j, e, a, iz) -> usize` (Euler–Bernoulli beam-column), `fix(node, ux: bool, uy: bool, rz: bool)`, `load(node, fx, fy, mz)`, `analyze() -> Result<Results, String>` (Err on a singular/unstable structure). `Results::displacement(node) -> (ux, uy, rz)`, `reaction(node) -> (fx, fy, mz)`, `member_end_forces(m) -> [f64; 6]` in local axes (N1, V1, M1, N2, V2, M2). Conventions: global x right, y up, rotation counter-clockwise positive; a reaction is the force the support exerts on the structure; member end forces are the forces the nodes exert on the member, in local axes (x from node i to node j).
 
-- [ ] T1.5: bim-cli: headless `bim` command over the document
+- [x] T1.5: bim-cli: headless `bim` command over the document
   - Files: Cargo.lock, crates/bim-cli/
   - Opens: T1.1, T1.4
   - Builder: sonnet
