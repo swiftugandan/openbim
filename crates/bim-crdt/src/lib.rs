@@ -26,12 +26,20 @@
 //! [`Replica::diagnostics`] reports every visible [`Value::Ref`] whose target is
 //! not live — the conflicts a concurrent delete can leave behind.
 //!
+//! [`Replica::evaluate`] adds the semantic layer on top of the merged state:
+//! dangling refs, Ref cycles and unsatisfiable constraint groups become
+//! materialized `ConflictDiagnostic` entities (see [`Evaluated`]).
+//!
 //! Local edits never fail: a `set` or `delete` on an unknown id is simply
 //! recorded and takes effect according to the rules above once merged.
 
 use std::collections::BTreeMap;
 
 use bim_doc::{Document, EntityId, Op, Value};
+
+mod semantic;
+
+pub use semantic::{Diagnostic, Evaluated, Reason, CONFLICT_DIAGNOSTIC_KIND, MAX_MAGNITUDE, UNSATISFIABLE_KEY};
 
 /// A Lamport timestamp: `(counter, peer)`, ordered lexicographically.
 ///

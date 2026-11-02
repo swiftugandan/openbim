@@ -8,3 +8,4 @@ publish.workspace = true
 
 [dependencies]
 bim-doc = { path = "../bim-doc" }
+bim-solver = { path = "../bim-solver" }
