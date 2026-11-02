@@ -1,0 +1,9 @@
+[package]
+name = "bim-doc"
+description = "Content-addressed semantic document graph with an op log"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
