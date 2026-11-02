@@ -3,9 +3,14 @@
 //!
 //! **The journal is the source of truth.** It is the line format of [`crate::ops`], one canonical op
 //! per line, UTF-8, each line ended by `\n`, with no header; `bim init` creates it empty.
-//! [`Project::open`] replays it into a [`Document`]. Entities are stored under the seed they were
+//! [`Project::open`] replays it into a [`Document`]. Entities are stored under the name they were
 //! written with (never the hashed id), so a replay reproduces the document exactly and the names
-//! the user chose stay recoverable.
+//! the user chose stay recoverable. Ops that words cannot carry (texts with spaces, Bools, Lists…)
+//! are journalled as one-line JSON objects (see [`crate::ops`]).
+//!
+//! The journal holds the ops as the user gave them. The reserved props a `create` sets (`_name`,
+//! `_schema`, spec/schema.md) are not written out: replaying the `create` sets them again
+//! ([`LineOp::to_ops`]), so the journal stays a valid ops file.
 //!
 //! Appending never edits in place: the new journal (the old bytes, verbatim, plus the new lines) is
 //! written to a temporary file in the same directory, synced, and renamed over `doc.oplog`. A
@@ -20,6 +25,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use bim_doc::{Document, EntityId, Value};
 
+use crate::json;
+
 use crate::ops::{self, resolve_id, LineOp, Located};
 use crate::CliError;
 
@@ -32,7 +39,7 @@ pub struct Project {
     pub dir: PathBuf,
     /// The live document: the result of replaying the journal.
     pub doc: Document,
-    /// The seed each entity was named by in the journal (created, referenced or both).
+    /// The name each entity was written with in the journal (created, referenced or both).
     names: HashMap<EntityId, String>,
     /// The journal text as read.
     journal: String,
@@ -45,9 +52,8 @@ pub struct Dangling {
     pub source: EntityId,
     /// The prop that holds it.
     pub key: String,
-    /// The missing entity. `None` only if `bim-doc` reports a dangling prop that is not a plain
-    /// `Ref` (it cannot with the value types of line ops).
-    pub target: Option<EntityId>,
+    /// The missing entity.
+    pub target: EntityId,
 }
 
 /// Creates the project directory (and missing parents) and an empty journal in it. Idempotent: an
@@ -107,7 +113,7 @@ impl Project {
         let mut doc = Document::new();
         let mut names = HashMap::new();
         for Located { line, op } in &parsed {
-            doc.apply(op.to_op()).map_err(|e| corrupt(*line, &op.describe_error(&e)))?;
+            op.apply_to(&mut doc).map_err(|e| corrupt(*line, &op.describe_error(&e)))?;
             for name in op.names() {
                 names.entry(resolve_id(name)).or_insert_with(|| name.to_string());
             }
@@ -115,24 +121,54 @@ impl Project {
         Ok(Project { dir: dir.to_path_buf(), doc, names, journal })
     }
 
-    /// The name to show for `id`: the seed it was written with, else its 32 hex digits.
+    /// The name to show for `id`: the live entity's `_name` prop, else the name it was written
+    /// with in the journal, else its 32 hex digits.
     pub fn name(&self, id: EntityId) -> String {
+        if let Some(Value::Text(name)) = self.doc.get(id).and_then(|e| e.props.get(ops::NAME_PROP)) {
+            return name.clone();
+        }
         self.names.get(&id).cloned().unwrap_or_else(|| id.to_string())
     }
 
-    /// Every dangling ref, in `bim-doc`'s order (by source id, then key).
+    /// Every dangling ref, in `bim-doc`'s order (by source id, then key); a prop whose value holds
+    /// several missing targets (in a List) gives one entry per distinct target, in value order.
     pub fn dangling(&self) -> Vec<Dangling> {
-        self.doc
-            .dangling_refs()
-            .into_iter()
-            .map(|(source, key)| {
-                let target = match self.doc.get(source).and_then(|e| e.props.get(&key)) {
-                    Some(Value::Ref(target)) => Some(*target),
-                    _ => None,
-                };
-                Dangling { source, key, target }
-            })
-            .collect()
+        let mut out = Vec::new();
+        for (source, key) in self.doc.dangling_refs() {
+            let Some(value) = self.doc.get(source).and_then(|e| e.props.get(&key)) else { continue };
+            let mut targets: Vec<EntityId> = Vec::new();
+            value.for_each_ref(&mut |t| {
+                if self.doc.get(t).is_none() && !targets.contains(&t) {
+                    targets.push(t);
+                }
+            });
+            out.extend(targets.into_iter().map(|target| Dangling { source, key: key.clone(), target }));
+        }
+        out
+    }
+
+    /// The JSON encoding (spec/schema.md) of `value`, naming Ref targets with [`Project::name`].
+    pub fn value_json(&self, value: &Value, out: &mut String) {
+        match value {
+            Value::Num(x) => json::write_num(out, *x),
+            Value::Text(s) => json::write_str(out, s),
+            Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            Value::Ref(target) => {
+                out.push_str("{\"ref\":");
+                json::write_str(out, &self.name(*target));
+                out.push('}');
+            }
+            Value::List(items) => {
+                out.push('[');
+                for (i, item) in items.iter().enumerate() {
+                    if i > 0 {
+                        out.push(',');
+                    }
+                    self.value_json(item, out);
+                }
+                out.push(']');
+            }
+        }
     }
 
     /// The journal text after appending `ops`: the current text verbatim, a line break if it did
@@ -227,11 +263,32 @@ mod tests {
         assert_eq!(p.doc.content_hash(), doc.content_hash());
     }
 
+    #[test]
+    fn replayed_creates_carry_the_reserved_props() {
+        let p = project("create wall Wall\n");
+        let e = p.doc.get(id("wall")).unwrap();
+        assert_eq!(e.props.get("_name"), Some(&Value::Text("wall".into())));
+        assert_eq!(e.props.get("_schema"), Some(&Value::Num(1.0)));
+        assert_eq!(p.doc.log().len(), 3);
+    }
+
     fn bim_doc_ops() -> Vec<bim_doc::Op> {
         use bim_doc::Op;
+        let reserved = |seed: &str| {
+            [
+                Op::Set { id: id(seed), key: "_name".into(), value: Value::Text(seed.into()) },
+                Op::Set { id: id(seed), key: "_schema".into(), value: Value::Num(1.0) },
+            ]
+        };
+        let [w1, w2] = reserved("wall");
+        let [l1, l2] = reserved("lvl");
         vec![
             Op::Create { id: id("wall"), kind: "Wall".into() },
+            w1,
+            w2,
             Op::Create { id: id("lvl"), kind: "Level".into() },
+            l1,
+            l2,
             Op::Set { id: id("wall"), key: "height".into(), value: Value::Num(3.5) },
             Op::Set { id: id("wall"), key: "host".into(), value: Value::Ref(id("lvl")) },
         ]
@@ -250,7 +307,7 @@ mod tests {
     fn replay_accepts_crlf_blank_lines_and_a_missing_final_newline() {
         let p = project("create a Wall\r\n\r\n  set a h num 2\r\ndelete a");
         assert!(p.doc.is_empty());
-        assert_eq!(p.doc.log().len(), 3);
+        assert_eq!(p.doc.log().len(), 5, "a create replays as create + two reserved sets");
     }
 
     #[test]
@@ -267,14 +324,34 @@ mod tests {
         let p = project(&format!("{MODEL}delete lvl\n"));
         assert_eq!(
             p.dangling(),
-            vec![Dangling { source: id("wall"), key: "host".into(), target: Some(id("lvl")) }]
+            vec![Dangling { source: id("wall"), key: "host".into(), target: id("lvl") }]
         );
         assert!(project(MODEL).dangling().is_empty());
         assert!(project("create a W\nset a self ref a\n").dangling().is_empty(), "a self ref is not dangling");
         // A ref to an entity that never existed dangles too; text that merely looks like a seed does not.
         let p = project("create a W\nset a r ref ghost\nset a t text ghost\n");
         assert_eq!(p.dangling().len(), 1);
-        assert_eq!(p.dangling()[0].target, Some(id("ghost")));
+        assert_eq!(p.dangling()[0].target, id("ghost"));
+        // Refs nested in Lists dangle too: one entry per missing target.
+        let p = project(concat!(
+            "create a W\ncreate b W\n",
+            r#"{"op":"set","id":"a","key":"l","value":[{"ref":"x"},[{"ref":"b"},{"ref":"y"},{"ref":"x"}]]}"#,
+            "\n"
+        ));
+        let targets: Vec<EntityId> = p.dangling().iter().map(|d| d.target).collect();
+        assert_eq!(targets, [id("x"), id("y")]);
+    }
+
+    #[test]
+    fn values_render_as_json_with_refs_by_name() {
+        let p = project(concat!(
+            "create w Wall\n",
+            r#"{"op":"set","id":"w","key":"l","value":[1.5,"a b",true,{"ref":"w"},{"ref":"ghost"},[]]}"#,
+            "\n"
+        ));
+        let mut out = String::new();
+        p.value_json(p.doc.get(id("w")).unwrap().props.get("l").unwrap(), &mut out);
+        assert_eq!(out, r#"[1.5,"a b",true,{"ref":"w"},{"ref":"ghost"},[]]"#);
     }
 
     #[test]
@@ -306,7 +383,7 @@ mod tests {
         let replayed = project(&p.appended(&ops));
         let mut doc = p.doc.clone();
         for op in &ops {
-            doc.apply(op.to_op()).unwrap();
+            op.apply_to(&mut doc).unwrap();
         }
         assert_eq!(replayed.doc, doc);
     }

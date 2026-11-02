@@ -101,6 +101,15 @@ fn files_in(dir: &Path) -> Vec<String> {
     names
 }
 
+/// Applies what `bim apply` makes of `create <seed> <kind>`: the create, then the reserved props
+/// `_name` (the seed as written) and `_schema` (1) that spec/schema.md has bim set at create.
+fn create(doc: &mut Document, seed: &str, kind: &str) {
+    let id = EntityId::parse(seed);
+    doc.apply(Op::Create { id, kind: kind.into() }).unwrap();
+    doc.apply(Op::Set { id, key: "_name".into(), value: Value::Text(seed.into()) }).unwrap();
+    doc.apply(Op::Set { id, key: "_schema".into(), value: Value::Num(1.0) }).unwrap();
+}
+
 /// The judge's two builds of the same model, in different op orders.
 const A_OPS: &str = "create wall Wall\ncreate lvl Level\nset wall height num 3.5\nset wall host ref lvl\nset wall name text north\n";
 const B_OPS: &str = "create lvl Level\ncreate wall Wall\nset wall name text north\nset wall height num 9\nset wall height num 3.5\nset wall host ref lvl\n";
@@ -177,7 +186,7 @@ fn hash_is_zero_padded_to_sixteen_digits() {
     // About one document in sixteen hashes to a value below 2^60; find such a model by search.
     let hash_of = |n: usize| {
         let mut doc = Document::new();
-        doc.apply(Op::Create { id: EntityId::derive(&format!("e{n}")), kind: "W".into() }).unwrap();
+        create(&mut doc, &format!("e{n}"), "W");
         doc.content_hash()
     };
     let n = (0..10_000).find(|&n| hash_of(n) < 1 << 60).expect("a leading-zero hash among 10000 models");
@@ -195,9 +204,9 @@ fn hash_matches_the_bim_doc_content_hash_of_the_same_ops() {
     let dir = s.project("p", A_OPS);
     let id = EntityId::derive;
     let mut doc = Document::new();
+    create(&mut doc, "wall", "Wall");
+    create(&mut doc, "lvl", "Level");
     for op in [
-        Op::Create { id: id("wall"), kind: "Wall".into() },
-        Op::Create { id: id("lvl"), kind: "Level".into() },
         Op::Set { id: id("wall"), key: "height".into(), value: Value::Num(3.5) },
         Op::Set { id: id("wall"), key: "host".into(), value: Value::Ref(id("lvl")) },
         Op::Set { id: id("wall"), key: "name".into(), value: Value::Text("north".into()) },
@@ -387,14 +396,136 @@ fn reserved_keys_are_rejected_in_op_files() {
     }
 }
 
+// ---- JSON ops and show -------------------------------------------------------------------
+
+const ULID: &str = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+fn show(dir: &Path, id: &str) -> String {
+    let run = bim(&[&"show", &dir, &id, &"--json"]).expect(0);
+    assert_eq!(run.err, "");
+    run.out.strip_suffix('\n').expect("one line").to_string()
+}
+
 #[test]
-fn json_ops_files_are_not_supported_yet_and_exit_2() {
+fn json_ops_build_entities_that_show_reports_with_reserved_props() {
     let s = Scratch::new();
     let dir = s.project("p", "");
-    let file = s.write("ops.json", r#"{"schema": 1, "ops": [{"op": "create", "id": "L1", "kind": "Level"}]}"#);
-    let run = bim(&[&"apply", &dir, &file]).rejected();
-    assert!(run.err.contains("JSON"), "{}", run.err);
-    assert_eq!(journal(&dir), b"");
+    let file = s.write(
+        "a.json",
+        format!(
+            r#"{{"schema": 1, "ops": [
+              {{"op": "create", "id": "L1", "kind": "Level", "props": {{"elevation": 0}}}},
+              {{"op": "create", "id": "{ULID}", "kind": "Wall", "props": {{
+                 "level": {{"ref": "L1"}}, "x2": 5.5, "y2": -1e-3, "big": 1e300, "third": 0.30000000000000004,
+                 "name": "north wall, façade \"q\"", "on": true, "off": false,
+                 "tags": [{{"ref": "L1"}}, "a", [1, false], []]}}}},
+              {{"op": "set", "id": "L1", "key": "elevation", "value": 3.25}},
+              {{"op": "create", "id": "tmp", "kind": "Level"}},
+              {{"op": "delete", "id": "tmp"}}
+            ]}}"#
+        ),
+    );
+    bim(&[&"apply", &dir, &file]).expect(0);
+    assert_eq!(
+        show(&dir, "L1"),
+        r#"{"id":"L1","kind":"Level","props":{"_name":"L1","_schema":1.0,"elevation":3.25}}"#
+    );
+    assert_eq!(
+        show(&dir, ULID),
+        format!(
+            r#"{{"id":"{ULID}","kind":"Wall","props":{{"_name":"{ULID}","_schema":1.0,"big":1e300,"level":{{"ref":"L1"}},"name":"north wall, façade \"q\"","off":false,"on":true,"tags":[{{"ref":"L1"}},"a",[1.0,false],[]],"third":0.30000000000000004,"x2":5.5,"y2":-0.001}}}}"#
+        )
+    );
+    // `--json` may come anywhere; unknown and deleted ids exit 2 with nothing on stdout.
+    assert_eq!(bim(&[&"show", &"--json", &dir, &"L1"]).expect(0).out, format!("{}\n", show(&dir, "L1")));
+    for id in ["tmp", "nobody", "l1"] {
+        let run = bim(&[&"show", &dir, &id, &"--json"]).rejected();
+        assert!(run.err.contains(&format!("entity `{id}` not found")), "{}", run.err);
+    }
+    bim(&[&"show", &dir, &"--json"]).rejected();
+    bim(&[&"show", &dir, &"L1", &"extra", &"--json"]).rejected();
+    // Line-format creates carry the reserved props too, and the journal replays all of it.
+    bim(&[&"apply", &dir, &s.write("b.ops", "create w Wall\nset w host ref L1\n")]).expect(0);
+    assert_eq!(show(&dir, "w"), r#"{"id":"w","kind":"Wall","props":{"_name":"w","_schema":1.0,"host":{"ref":"L1"}}}"#);
+    let copy = s.project("q", "");
+    bim(&[&"apply", &copy, &dir.join("doc.oplog")]).expect(0);
+    assert_eq!(hash(&copy), hash(&dir), "the journal is itself a valid ops file");
+    assert_eq!(show(&copy, ULID), show(&dir, ULID));
+}
+
+#[test]
+fn json_and_line_ops_for_the_same_model_hash_alike() {
+    let s = Scratch::new();
+    let line = s.project("line", "create L1 Level\nset L1 elevation num 3.25\ncreate w Wall\nset w host ref L1\n");
+    let json = s.project("json", "");
+    let file = s.write(
+        "c.json",
+        r#"{"schema": 1, "ops": [{"op": "create", "id": "w", "kind": "Wall"},
+            {"op": "create", "id": "L1", "kind": "Level", "props": {"elevation": 1}},
+            {"op": "set", "id": "w", "key": "host", "value": {"ref": "L1"}},
+            {"op": "set", "id": "L1", "key": "elevation", "value": 3.25}]}"#,
+    );
+    bim(&[&"apply", &json, &file]).expect(0);
+    assert_eq!(hash(&line), hash(&json));
+    bim(&[&"diff", &line, &json]).expect(0);
+}
+
+#[test]
+fn invalid_json_ops_files_change_nothing_and_exit_2() {
+    let s = Scratch::new();
+    let dir = s.project("p", A_OPS);
+    let before = (journal(&dir), hash(&dir));
+    let first = r#"{"op": "create", "id": "fresh", "kind": "Level"}"#;
+    let cases = [
+        ("set on a missing id", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "ghost", "key": "x", "value": 1}}]}}"#), "ops[1]: entity `ghost` not found"),
+        ("create of an existing id", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "create", "id": "wall", "kind": "W"}}]}}"#), "ops[1]: entity `wall` already exists"),
+        ("unknown op", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "rename", "id": "wall"}}]}}"#), "unknown op `rename`"),
+        ("null value", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "wall", "key": "x", "value": null}}]}}"#), "null"),
+        ("reserved set", format!(r#"{{"schema": 1, "ops": [{first}, {{"op": "set", "id": "wall", "key": "_name", "value": "evil"}}]}}"#), "reserved"),
+        ("reserved prop at create", r#"{"schema": 1, "ops": [{"op": "create", "id": "fresh", "kind": "W", "props": {"_schema": 2}}]}"#.to_string(), "reserved"),
+        ("schema 2", format!(r#"{{"schema": 2, "ops": [{first}]}}"#), "schema version"),
+        ("malformed", format!(r#"{{"schema": 1, "ops": [{first},"#), "invalid JSON"),
+    ];
+    let latin1 = (
+        "not UTF-8",
+        b"{\"schema\": 1, \"ops\": [{\"op\": \"create\", \"id\": \"fresh\", \"kind\": \"caf\xe9\"}]}".to_vec(),
+        "UTF-8",
+    );
+    let cases = cases.into_iter().map(|(what, text, message)| (what, text.into_bytes(), message)).chain([latin1]);
+    for (what, bytes, message) in cases {
+        let run = bim(&[&"apply", &dir, &s.write("bad.json", bytes)]).rejected();
+        assert!(run.err.contains(message) && run.err.contains("bad.json"), "{what}: {}", run.err);
+        assert_eq!((journal(&dir), hash(&dir)), before, "{what}");
+        bim(&[&"show", &dir, &"fresh", &"--json"]).rejected();
+    }
+}
+
+#[test]
+fn values_without_a_word_form_reach_the_journal_as_json_lines() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    let file = s.write(
+        "v.json",
+        r#"{"schema": 1, "ops": [{"op": "create", "id": "a b", "kind": "Wall", "props": {"name": "two words", "on": true, "l": [{"ref": "a b"}]}}, {"op": "set", "id": "a b", "key": "h", "value": 3}]}"#,
+    );
+    bim(&[&"apply", &dir, &file]).expect(0);
+    assert_eq!(
+        String::from_utf8(journal(&dir)).unwrap(),
+        concat!(
+            r#"{"op":"create","id":"a b","kind":"Wall"}"#, "\n",
+            r#"{"op":"set","id":"a b","key":"name","value":"two words"}"#, "\n",
+            r#"{"op":"set","id":"a b","key":"on","value":true}"#, "\n",
+            r#"{"op":"set","id":"a b","key":"l","value":[{"ref":"a b"}]}"#, "\n",
+            r#"{"op":"set","id":"a b","key":"h","value":3.0}"#, "\n",
+        )
+    );
+    assert_eq!(
+        show(&dir, "a b"),
+        r#"{"id":"a b","kind":"Wall","props":{"_name":"a b","_schema":1.0,"h":3.0,"l":[{"ref":"a b"}],"name":"two words","on":true}}"#
+    );
+    // A dangling ref inside a List is reported by validate.
+    bim(&[&"apply", &dir, &s.write("d.json", r#"{"schema": 1, "ops": [{"op": "set", "id": "a b", "key": "l", "value": [[{"ref": "gone"}]]}]}"#)]).expect(0);
+    assert_eq!(bim(&[&"validate", &dir]).expect(1).out, "dangling a b l gone\n");
 }
 
 #[test]
@@ -516,15 +647,11 @@ fn ops_in_one_file_see_each_other() {
     bim(&[&"apply", &dir, &file]).expect(0);
     let mut doc = Document::new();
     let a = EntityId::derive("a");
-    for op in [
-        Op::Create { id: a, kind: "W".into() },
-        Op::Set { id: a, key: "h".into(), value: Value::Num(1.0) },
-        Op::Delete { id: a },
-        Op::Create { id: a, kind: "Slab".into() },
-        Op::Set { id: a, key: "t".into(), value: Value::Num(2.0) },
-    ] {
-        doc.apply(op).unwrap();
-    }
+    create(&mut doc, "a", "W");
+    doc.apply(Op::Set { id: a, key: "h".into(), value: Value::Num(1.0) }).unwrap();
+    doc.apply(Op::Delete { id: a }).unwrap();
+    create(&mut doc, "a", "Slab");
+    doc.apply(Op::Set { id: a, key: "t".into(), value: Value::Num(2.0) }).unwrap();
     assert_eq!(hash(&dir), format!("{:016x}", doc.content_hash()));
 }
 
@@ -538,7 +665,7 @@ fn numbers_survive_the_journal_bit_for_bit() {
     let dir = s.project("p", &ops);
     let mut doc = Document::new();
     let e = EntityId::derive("e");
-    doc.apply(Op::Create { id: e, kind: "W".into() }).unwrap();
+    create(&mut doc, "e", "W");
     for (i, w) in words.iter().enumerate() {
         let x: f64 = w.parse().unwrap();
         doc.apply(Op::Set { id: e, key: format!("k{i}"), value: Value::Num(x) }).unwrap();

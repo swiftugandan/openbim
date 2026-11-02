@@ -89,7 +89,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Verification: bash judges/T1.5.sh
   - Spec: Crate `bim-cli` producing binary `bim`. `bim init <dir>` creates `<dir>/doc.oplog` (empty). `bim apply <dir> <ops-file>` appends ops, one per line: `create <seed> <kind>`, `set <seed> <key> num <f64>|text <word>|ref <seed>`, `delete <seed>` (ids are `EntityId::derive(seed)`); an invalid op exits 2 and leaves the log unchanged. `bim hash <dir>` prints `content_hash` as 16 lowercase hex digits. `bim validate <dir>` exits 0 when there are no dangling refs, else prints one line per dangling ref and exits 1. `bim diff <dirA> <dirB>` prints `same` and exits 0 when hashes match, else `differ` and exits 1. Blank lines in an ops file are ignored; any other error (missing directory, unreadable file) prints a message to stderr and exits 2.
 
-- [ ] T1.6: bim-doc schema v1: ULIDs, Bool/List values, provenance, dependency graph, JSON ops
+- [x] T1.6: bim-doc schema v1: ULIDs, Bool/List values, provenance, dependency graph, JSON ops
   - Files: Cargo.lock, crates/bim-doc/, crates/bim-cli/
   - Opens: T1.5
   - Verification: bash judges/T1.6.sh

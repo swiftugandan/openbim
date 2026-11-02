@@ -7,6 +7,7 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::ops::{self, LineOp, Located};
+use crate::json;
 use crate::project::{self, Project};
 use crate::CliError;
 
@@ -21,21 +22,50 @@ pub(crate) fn init(args: &[OsString], _out: &mut dyn Write) -> Outcome {
 
 /// `bim apply <dir> <ops-file>`: appends the file's ops to the journal, all or none. Prints nothing.
 ///
-/// The whole file is parsed first, then applied to a copy of the live document; only when every op
-/// has applied is the journal rewritten. Any failure before that point leaves the journal untouched.
+/// `*.json` files are JSON ops (spec/cli.md), anything else the line format. The whole file is
+/// parsed and checked first, then applied to a copy of the live document; only when every op has
+/// applied is the journal rewritten. Any failure before that point leaves the journal untouched.
 pub(crate) fn apply(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let [dir, file] = operands::<2>(args, "apply <dir> <ops-file>")?;
     let (dir, file) = (Path::new(dir), Path::new(file));
     let parsed = read_ops_file(file)?;
     let project = Project::open(dir)?;
     let mut scratch = project.doc.clone();
-    for Located { line, op } in &parsed {
-        scratch.apply(op.to_op()).map_err(|e| {
-            CliError::Input(format!("{}:{line}: {}", file.display(), op.describe_error(&e)))
-        })?;
+    for FileOp { at, op } in &parsed {
+        op.apply_to(&mut scratch).map_err(|e| CliError::Input(format!("{at}: {}", op.describe_error(&e))))?;
     }
-    let ops: Vec<LineOp> = parsed.into_iter().map(|located| located.op).collect();
+    let ops: Vec<LineOp> = parsed.into_iter().map(|file_op| file_op.op).collect();
     project.append(&ops)?;
+    Ok(0)
+}
+
+/// `bim show <dir> <id> [--json]`: prints the live entity named `<id>` (a ULID or a seed) as
+/// `{"id","kind","props"}` (spec/cli.md): `id` is its `_name`, `props` every prop in key order,
+/// reserved ones included, with values in their JSON encoding (spec/schema.md) and Refs naming
+/// their target. The output is that JSON document with or without `--json`. An id that is not a
+/// live entity (unknown or deleted) is an input error (exit 2).
+pub(crate) fn show(args: &[OsString], out: &mut dyn Write) -> Outcome {
+    let operands_only: Vec<OsString> = args.iter().filter(|a| a.as_os_str() != "--json").cloned().collect();
+    let [dir, name] = operands::<2>(&operands_only, "show <dir> <id> --json")?;
+    let project = Project::open(Path::new(dir))?;
+    let name = name.to_str().ok_or_else(|| CliError::Input(format!("id `{}` is not valid UTF-8", name.to_string_lossy())))?;
+    let id = ops::resolve_id(name);
+    let entity = project.doc.get(id).ok_or_else(|| CliError::Input(format!("entity `{name}` not found")))?;
+    let mut text = String::from("{\"id\":");
+    json::write_str(&mut text, &project.name(id));
+    text.push_str(",\"kind\":");
+    json::write_str(&mut text, &entity.kind);
+    text.push_str(",\"props\":{");
+    for (i, (key, value)) in entity.props.iter().enumerate() {
+        if i > 0 {
+            text.push(',');
+        }
+        json::write_str(&mut text, key);
+        text.push(':');
+        project.value_json(value, &mut text);
+    }
+    text.push_str("}}");
+    emit(out, &text)?;
     Ok(0)
 }
 
@@ -54,12 +84,7 @@ pub(crate) fn validate(args: &[OsString], out: &mut dyn Write) -> Outcome {
     let project = Project::open(Path::new(dir))?;
     let dangling = project.dangling();
     for d in &dangling {
-        let mut line = format!("dangling {} {}", project.name(d.source), d.key);
-        if let Some(target) = d.target {
-            line.push(' ');
-            line.push_str(&project.name(target));
-        }
-        emit(out, &line)?;
+        emit(out, &format!("dangling {} {} {}", project.name(d.source), d.key, project.name(d.target)))?;
     }
     Ok(u8::from(!dangling.is_empty()))
 }
@@ -90,24 +115,41 @@ fn emit(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
     writeln!(out, "{line}").map_err(|e| CliError::Input(format!("cannot write to standard output: {e}")))
 }
 
+/// An op read from an ops file, with where it came from (`<file>:<line>` or `<file>: ops[<i>]`)
+/// for error messages.
+#[derive(Debug)]
+struct FileOp {
+    at: String,
+    op: LineOp,
+}
+
 /// Reads and parses an ops file, and checks the rules that belong to `bim apply` rather than to the
-/// line syntax.
-fn read_ops_file(file: &Path) -> Result<Vec<Located>, CliError> {
+/// syntax.
+fn read_ops_file(file: &Path) -> Result<Vec<FileOp>, CliError> {
     let shown = file.display();
-    // spec/cli.md: `*.json` is the JSON ops format; anything else is the line format.
-    if file.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("json")) {
-        return Err(CliError::Input(format!("{shown}: JSON ops files are not supported yet")));
-    }
     let bytes = fs::read(file).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
     let text = String::from_utf8(bytes)
         .map_err(|_| CliError::Input(format!("{shown}: not valid UTF-8")))?;
-    let parsed = ops::parse_text(&text)
-        .map_err(|e| CliError::Input(format!("{shown}:{}: {}", e.line, e.reason)))?;
-    // spec/schema.md: op files reject sets of reserved keys (a leading `_`); the kernel owns those.
-    for Located { line, op } in &parsed {
+    // spec/cli.md: `*.json` is the JSON ops format; anything else is the line format.
+    let parsed: Vec<FileOp> = if file.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("json")) {
+        ops::parse_json_ops(&text)
+            .map_err(|reason| CliError::Input(format!("{shown}: {reason}")))?
+            .into_iter()
+            .map(|(index, op)| FileOp { at: format!("{shown}: ops[{index}]"), op })
+            .collect()
+    } else {
+        ops::parse_text(&text)
+            .map_err(|e| CliError::Input(format!("{shown}:{}: {}", e.line, e.reason)))?
+            .into_iter()
+            .map(|Located { line, op }| FileOp { at: format!("{shown}:{line}"), op })
+            .collect()
+    };
+    // spec/schema.md: op files reject creates/sets of reserved keys (a leading `_`); bim owns those.
+    // A JSON create's props arrive here as sets.
+    for FileOp { at, op } in &parsed {
         if let Some(key) = op.key().filter(|key| key.starts_with('_')) {
             return Err(CliError::Input(format!(
-                "{shown}:{line}: key `{key}` is reserved (keys starting with `_` are set by bim itself)"
+                "{at}: key `{key}` is reserved (keys starting with `_` are set by bim itself)"
             )));
         }
     }
@@ -156,14 +198,41 @@ mod tests {
     }
 
     #[test]
-    fn json_ops_files_are_not_supported_yet() {
+    fn json_ops_files_are_read_by_extension() {
         let tmp = TempDir::new();
         for name in ["ops.json", "OPS.JSON"] {
             let file = tmp.path().join(name);
-            fs::write(&file, r#"{"schema": 1, "ops": []}"#).unwrap();
-            let message = input_error(read_ops_file(&file).map(|_| 0));
-            assert!(message.contains("JSON ops files are not supported yet"), "{message}");
+            fs::write(&file, r#"{"schema": 1, "ops": [{"op": "create", "id": "a", "kind": "W", "props": {"h": 1}}]}"#)
+                .unwrap();
+            assert_eq!(read_ops_file(&file).unwrap().len(), 2, "create + one prop set");
         }
+        // The same text under another extension is the line format.
+        let file = tmp.path().join("ops.txt");
+        fs::write(&file, r#"{"schema": 1, "ops": []}"#).unwrap();
+        assert!(input_error(read_ops_file(&file).map(|_| 0)).contains(":1: missing member `op`"));
+    }
+
+    #[test]
+    fn json_ops_files_with_reserved_keys_are_rejected() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join("r.json");
+        for op in [
+            r#"{"op": "create", "id": "b", "kind": "W", "props": {"ok": 1, "_name": "x"}}"#,
+            r#"{"op": "set", "id": "a", "key": "_schema", "value": 2}"#,
+        ] {
+            fs::write(&file, format!(r#"{{"schema": 1, "ops": [{{"op": "create", "id": "a", "kind": "W"}}, {op}]}}"#)).unwrap();
+            let message = input_error(read_ops_file(&file).map(|_| 0));
+            assert!(message.contains(": ops[1]: key `_") && message.contains("is reserved"), "{message}");
+        }
+    }
+
+    #[test]
+    fn json_errors_name_the_file_and_op() {
+        let tmp = TempDir::new();
+        let file = tmp.path().join("bad.json");
+        fs::write(&file, r#"{"schema": 1, "ops": [{"op": "delete", "id": "a"}, {"op": "set", "id": "a", "key": "k", "value": null}]}"#).unwrap();
+        let message = input_error(read_ops_file(&file).map(|_| 0));
+        assert!(message.starts_with(&format!("{}: ops[1]: `value`: null", file.display())), "{message}");
     }
 
     #[test]
