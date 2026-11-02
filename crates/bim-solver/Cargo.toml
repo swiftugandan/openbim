@@ -1,6 +1,6 @@
 [package]
 name = "bim-solver"
-description = "2D geometric constraint solver (Levenberg-Marquardt) with DOF analysis"
+description = "2D/3D geometric constraint solvers (Levenberg-Marquardt, symbolic Jacobians) with DOF decomposition"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
