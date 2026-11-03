@@ -25,11 +25,12 @@
 //! be joined into a manifold solid (see [`box_union`]: only with mullions of about 1e-7) keeps its
 //! quantities but has no mesh.
 
-use bim_doc::{Document, Entity};
+use bim_doc::Entity;
 use bim_geom::Point3;
 
+use crate::build::{elevation, num, Cx};
 use crate::mesh::{box_union, Aabb};
-use crate::{elevation, entity_name, num, CurtainWallGeom, Mesh, StairGeom};
+use crate::{entity_name, CurtainWallGeom, Mesh, StairGeom};
 
 /// Most panels (bays along the wall × bays up it) of a curtain wall that is built: the mesh has
 /// some 30 triangles per panel.
@@ -79,11 +80,11 @@ impl Frame {
 }
 
 /// The quantities and the solid of a `CurtainWall`.
-pub(crate) fn curtain_wall(doc: &Document, e: &Entity) -> Option<(CurtainWallGeom, Mesh)> {
-    let (x1, y1, x2, y2) = (num(doc, e, "x1")?, num(doc, e, "y1")?, num(doc, e, "x2")?, num(doc, e, "y2")?);
-    let (h, u_spacing, v_spacing) = (num(doc, e, "height")?, num(doc, e, "u_spacing")?, num(doc, e, "v_spacing")?);
-    let (w, d, pt) = (num(doc, e, "mullion_width")?, num(doc, e, "mullion_depth")?, num(doc, e, "panel_thickness")?);
-    let z0 = elevation(doc, e, "level")?;
+pub(crate) fn curtain_wall(cx: &Cx, e: &Entity) -> Option<(CurtainWallGeom, Mesh)> {
+    let (x1, y1, x2, y2) = (num(cx, e, "x1")?, num(cx, e, "y1")?, num(cx, e, "x2")?, num(cx, e, "y2")?);
+    let (h, u_spacing, v_spacing) = (num(cx, e, "height")?, num(cx, e, "u_spacing")?, num(cx, e, "v_spacing")?);
+    let (w, d, pt) = (num(cx, e, "mullion_width")?, num(cx, e, "mullion_depth")?, num(cx, e, "panel_thickness")?);
+    let z0 = elevation(cx, e, "level")?;
     let len = (x2 - x1).hypot(y2 - y1);
     if !(len > 1e-9 && len.is_finite()) || ![h, u_spacing, v_spacing, w, d, pt].iter().all(|&x| x > 0.0) {
         return None;
@@ -120,10 +121,10 @@ pub(crate) fn curtain_wall(doc: &Document, e: &Entity) -> Option<(CurtainWallGeo
 }
 
 /// The quantities and the solid of a `Stair`.
-pub(crate) fn stair(doc: &Document, e: &Entity) -> Option<(StairGeom, Mesh)> {
-    let (x, y, angle) = (num(doc, e, "x")?, num(doc, e, "y")?, num(doc, e, "angle")?);
-    let (width, tread, count) = (num(doc, e, "width")?, num(doc, e, "tread")?, num(doc, e, "riser_count")?);
-    let (zb, zt) = (elevation(doc, e, "base")?, elevation(doc, e, "top")?);
+pub(crate) fn stair(cx: &Cx, e: &Entity) -> Option<(StairGeom, Mesh)> {
+    let (x, y, angle) = (num(cx, e, "x")?, num(cx, e, "y")?, num(cx, e, "angle")?);
+    let (width, tread, count) = (num(cx, e, "width")?, num(cx, e, "tread")?, num(cx, e, "riser_count")?);
+    let (zb, zt) = (elevation(cx, e, "base")?, elevation(cx, e, "top")?);
     if !(width > 0.0 && tread > 0.0 && zt > zb) || count.fract() != 0.0 || !(1.0..=MAX_RISERS as f64).contains(&count) {
         return None;
     }
@@ -139,10 +140,10 @@ pub(crate) fn stair(doc: &Document, e: &Entity) -> Option<(StairGeom, Mesh)> {
 }
 
 /// The solid of a `Ramp`.
-pub(crate) fn ramp(doc: &Document, e: &Entity) -> Option<Mesh> {
-    let (x, y, angle) = (num(doc, e, "x")?, num(doc, e, "y")?, num(doc, e, "angle")?);
-    let (width, length) = (num(doc, e, "width")?, num(doc, e, "length")?);
-    let (zb, zt) = (elevation(doc, e, "base")?, elevation(doc, e, "top")?);
+pub(crate) fn ramp(cx: &Cx, e: &Entity) -> Option<Mesh> {
+    let (x, y, angle) = (num(cx, e, "x")?, num(cx, e, "y")?, num(cx, e, "angle")?);
+    let (width, length) = (num(cx, e, "width")?, num(cx, e, "length")?);
+    let (zb, zt) = (elevation(cx, e, "base")?, elevation(cx, e, "top")?);
     let rise = zt - zb;
     if !(width > 0.0 && length > 0.0 && rise > 0.0) {
         return None;

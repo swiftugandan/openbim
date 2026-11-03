@@ -130,6 +130,7 @@ version = "0.1.0"
 dependencies = [
  "bim-doc",
  "bim-geom",
+ "bim-incr",
  "bim-model",
 ]
 
@@ -148,6 +149,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-incr"
+version = "0.1.0"
+
+[[package]]
 name = "bim-mep"
 version = "0.1.0"
 dependencies = [
@@ -162,6 +167,7 @@ version = "0.1.0"
 dependencies = [
  "bim-doc",
  "bim-geom",
+ "bim-incr",
  "bim-sketch",
 ]
 

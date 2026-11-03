@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use bim_geom::{Point3, Polygon3, Solid, Vec3};
-use bim_model::Mesh;
+use crate::Mesh;
 
 /// The part of `mesh` with depth `p·f ≥ c`, as a [`Solid`] whose faces are the clipped triangles
 /// plus the `cap` regions (the section by the plane, outer loops counter-clockwise about `−f`).

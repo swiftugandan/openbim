@@ -1,0 +1,9 @@
+[package]
+name = "bim-incr"
+description = "Demand-driven incremental computation: inputs with revisions, memoized derived queries with recorded dependencies, red-green validation and early cutoff"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -11,12 +11,14 @@
 //! such triangles are kept. A Shape referenced by a ComponentDefinition is not placed itself; a
 //! Shape with no faces, or with malformed props, has no element.
 
-use bim_doc::{Document, Entity, EntityId, Value};
+use bim_doc::{Document, Entity, Value};
 use bim_geom::{Point2, Point3, Polygon};
 use bim_sketch::geom::Plane;
 use bim_sketch::Shape;
 
-use crate::{entity_name, Element, Mesh};
+use crate::build::Cx;
+use crate::query::IsDefinitionShape;
+use crate::{Element, Mesh, Session};
 
 /// A 4×4 transform as 16 column-major numbers.
 type Mat4 = [f64; 16];
@@ -101,45 +103,44 @@ pub fn shape_mesh(shape: &Shape, m: &Mat4) -> Option<Mesh> {
     Some(mesh)
 }
 
-/// The elements of every placed Shape and every ComponentInstance of `doc`.
-pub fn shape_elements(doc: &Document) -> Vec<Element> {
-    let mut out = Vec::new();
-    let definition_shapes: Vec<EntityId> = doc
-        .entities()
-        .filter(|e| e.kind == "ComponentDefinition")
-        .filter_map(|e| match e.props.get("shape") {
-            Some(Value::Ref(id)) => Some(*id),
-            _ => None,
-        })
-        .collect();
-    for e in doc.entities() {
-        match e.kind.as_str() {
-            "Shape" if !definition_shapes.contains(&e.id) => {
-                let (Ok(shape), Some(m)) = (Shape::from_entity(e), transform(e)) else { continue };
-                if let Some(mesh) = shape_mesh(&shape, &m) {
-                    out.push(Element { id: e.id, name: entity_name(e), kind: "Shape".into(), mesh });
-                }
+/// The mesh of a placed Shape or a ComponentInstance (the Shape/ComponentInstance arm of an
+/// element's solid query): reads the entity's record, for an instance its definition's and the
+/// definition's Shape's, and whether a Shape is a definition's (then it is not placed).
+pub(crate) fn shape_element(cx: &Cx, e: &Entity) -> Option<Mesh> {
+    match e.kind.as_str() {
+        "Shape" => {
+            if *cx.db.get::<IsDefinitionShape>(&e.id) {
+                return None;
             }
-            "ComponentInstance" => {
-                let Some(Value::Ref(def)) = e.props.get("definition") else { continue };
-                let Some(def) = doc.get(*def).filter(|d| d.kind == "ComponentDefinition") else { continue };
-                let Some(Value::Ref(sid)) = def.props.get("shape") else { continue };
-                let Some(se) = doc.get(*sid).filter(|s| s.kind == "Shape") else { continue };
-                let (Ok(shape), Some(ms), Some(mi)) = (Shape::from_entity(se), transform(se), transform(e)) else { continue };
-                if let Some(mesh) = shape_mesh(&shape, &mul(&mi, &ms)) {
-                    out.push(Element { id: e.id, name: entity_name(e), kind: "ComponentInstance".into(), mesh });
-                }
-            }
-            _ => {}
+            let (Ok(shape), Some(m)) = (Shape::from_entity(e), transform(e)) else { return None };
+            shape_mesh(&shape, &m)
         }
+        "ComponentInstance" => {
+            let Some(Value::Ref(def)) = e.props.get("definition") else { return None };
+            let def = cx.get(*def).filter(|d| d.kind == "ComponentDefinition")?;
+            let Some(Value::Ref(sid)) = def.props.get("shape") else { return None };
+            let se = cx.get(*sid).filter(|s| s.kind == "Shape")?;
+            let (Ok(shape), Some(ms), Some(mi)) = (Shape::from_entity(&se), transform(&se), transform(e)) else { return None };
+            shape_mesh(&shape, &mul(&mi, &ms))
+        }
+        _ => None,
     }
-    out
+}
+
+/// The elements of every placed Shape and every ComponentInstance of `doc`, sorted by name.
+pub fn shape_elements(doc: &Document) -> Vec<Element> {
+    Session::from_document(doc)
+        .model()
+        .elements
+        .into_iter()
+        .filter(|e| e.kind == "Shape" || e.kind == "ComponentInstance")
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bim_doc::Op;
+    use bim_doc::{EntityId, Op};
 
     fn doc_with(json: &str) -> Document {
         let mut doc = Document::new();

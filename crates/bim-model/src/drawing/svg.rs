@@ -11,8 +11,8 @@
 
 use std::fmt::Write;
 
-use crate::paper::{dim_marks, num, Frame, TEXT};
-use crate::{Drawing, Layer, Shape};
+use super::paper::{dim_marks, num, Frame, TEXT};
+use super::{Drawing, Layer, Shape};
 
 /// The drawing as an SVG document.
 pub fn to_svg(drawing: &Drawing) -> String {
