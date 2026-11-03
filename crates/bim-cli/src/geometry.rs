@@ -160,7 +160,7 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
 }
 
 /// Writes `bytes` to a temporary file next to `path` and renames it over `path`.
-fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
     let fail = |e: std::io::Error| CliError::Input(format!("{}: {e}", path.display()));
     let name = path.file_name().ok_or_else(|| CliError::Input(format!("{}: not a file path", path.display())))?;
     let mut tmp_name = OsString::from(".");
