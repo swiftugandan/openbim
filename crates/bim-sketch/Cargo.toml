@@ -1,6 +1,6 @@
 [package]
 name = "bim-sketch"
-description = "Direct modelling: Shapes, drawing with face finding, push/pull and erase (spec/sketch.md)"
+description = "Direct modelling: Shapes, drawing with face finding, push/pull, erase, offset, follow-me, move/rotate/scale, paint and components (spec/sketch.md)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

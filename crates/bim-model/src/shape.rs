@@ -217,6 +217,37 @@ mod tests {
     }
 
     #[test]
+    fn make_component_places_each_instance_and_edits_reach_them_all() {
+        let mut doc = doc_with(BOX);
+        let t: Vec<Value> = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 10.0, 0.0, 0.0, 1.0].iter().map(|&x| Value::Num(x)).collect();
+        doc.apply(Op::Set { id: EntityId::parse("box"), key: "transform".into(), value: Value::List(t) }).unwrap();
+        let sketch = |doc: &mut Document, cmds: &str| {
+            for op in bim_sketch::run(doc, &format!(r#"{{"schema": 1, "commands": [{cmds}]}}"#)).unwrap() {
+                doc.apply(op).unwrap();
+            }
+        };
+        sketch(&mut doc, r#"{"op": "make_component", "shape": "box", "definition": "D", "instance": "I", "name": "Crate"}"#);
+        let i2 = EntityId::parse("I2");
+        doc.apply(Op::Create { id: i2, kind: "ComponentInstance".into() }).unwrap();
+        doc.apply(Op::Set { id: i2, key: "definition".into(), value: Value::Ref(EntityId::parse("D")) }).unwrap();
+        for (vol, x0) in [(30.0, 10.0), (42.0, 10.0)] {
+            if vol > 30.0 {
+                sketch(&mut doc, r#"{"op": "pushpull", "shape": "box", "face": 1, "distance": 1}"#);
+            }
+            let els = shape_elements(&doc);
+            assert_eq!(els.len(), 2, "the definition's Shape is not placed itself");
+            let i = els.iter().find(|e| e.id == EntityId::parse("I")).unwrap();
+            let j = els.iter().find(|e| e.id == i2).unwrap();
+            for e in [i, j] {
+                assert!(e.mesh.is_closed());
+                assert!((e.mesh.volume() - vol).abs() < 1e-9);
+            }
+            assert!((i.mesh.bounds().unwrap().0.x - x0).abs() < 1e-12, "the instance carries the former transform");
+            assert!(j.mesh.bounds().unwrap().0.x.abs() < 1e-12);
+        }
+    }
+
+    #[test]
     fn component_instances_are_placed_and_definition_shapes_are_not() {
         let mut doc = doc_with(BOX);
         let (b, d, i) = (EntityId::parse("box"), EntityId::parse("def"), EntityId::parse("inst"));
