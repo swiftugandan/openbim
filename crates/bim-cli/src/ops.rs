@@ -94,6 +94,17 @@ pub fn resolve_id(name: &str) -> EntityId {
 }
 
 impl LineValue {
+    /// The line value of a document value, naming Ref targets with `name`.
+    pub fn from_value(value: &Value, name: &dyn Fn(EntityId) -> String) -> LineValue {
+        match value {
+            Value::Num(x) => LineValue::Num(*x),
+            Value::Text(s) => LineValue::Text(s.clone()),
+            Value::Ref(target) => LineValue::Ref(name(*target)),
+            Value::Bool(b) => LineValue::Bool(*b),
+            Value::List(items) => LineValue::List(items.iter().map(|item| LineValue::from_value(item, name)).collect()),
+        }
+    }
+
     /// The document value: Ref names resolved to ids.
     pub fn to_value(&self) -> Value {
         match self {
@@ -217,6 +228,43 @@ impl LineOp {
             }
             LineOp::Delete { seed } => vec![Op::Delete { id: resolve_id(seed) }],
         }
+    }
+
+    /// The line ops that journal a sequence of document ops, naming every entity with `name`
+    /// (which must give a name that [`resolve_id`] maps back to the id: the name the entity was
+    /// written with, or its ULID string). A `Create` directly followed by `Set`s of the reserved
+    /// `_name` (equal to the entity's name) and `_schema` (the schema version) folds into one
+    /// `create` line, which sets them again on replay ([`LineOp::to_ops`]).
+    pub fn from_doc_ops(ops: &[Op], name: &dyn Fn(EntityId) -> String) -> Vec<LineOp> {
+        let mut out = Vec::with_capacity(ops.len());
+        let mut i = 0;
+        while i < ops.len() {
+            match &ops[i] {
+                Op::Create { id, kind } => {
+                    let seed = name(*id);
+                    out.push(LineOp::Create { seed: seed.clone(), kind: kind.clone() });
+                    i += 1;
+                    while let Some(Op::Set { id: target, key, value }) = ops.get(i) {
+                        let folded = target == id
+                            && ((key == NAME_PROP && *value == Value::Text(seed.clone()))
+                                || (key == SCHEMA_PROP && *value == Value::Num(f64::from(Document::SCHEMA_VERSION))));
+                        if !folded {
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                Op::Set { id, key, value } => {
+                    out.push(LineOp::Set { seed: name(*id), key: key.clone(), value: LineValue::from_value(value, name) });
+                    i += 1;
+                }
+                Op::Delete { id } => {
+                    out.push(LineOp::Delete { seed: name(*id) });
+                    i += 1;
+                }
+            }
+        }
+        out
     }
 
     /// Applies the op to `doc`, all of its document ops or none.
@@ -833,6 +881,28 @@ mod tests {
         assert_eq!(parse("create wall Wall").names().collect::<Vec<_>>(), ["wall"]);
         let nested = set("w", "k", LineValue::List(vec![LineValue::Ref("a".into()), LineValue::List(vec![LineValue::Ref("b".into())])]));
         assert_eq!(nested.names().collect::<Vec<_>>(), ["w", "a", "b"]);
+    }
+
+    #[test]
+    fn doc_ops_fold_back_into_line_ops() {
+        let wall = EntityId::derive("wall");
+        let lvl = EntityId::derive("lvl");
+        let name = |id: EntityId| if id == wall { "wall".to_string() } else { id.to_ulid_string() };
+        let mut ops = parse("create wall Wall").to_ops();
+        ops.push(Op::Set { id: wall, key: "host".into(), value: Value::Ref(lvl) });
+        ops.push(Op::Set { id: wall, key: "_name".into(), value: Value::Text("other".into()) });
+        ops.push(Op::Delete { id: wall });
+        let lines = LineOp::from_doc_ops(&ops, &name);
+        assert_eq!(lines[0], create("wall", "Wall"));
+        assert_eq!(lines[1], set("wall", "host", LineValue::Ref(lvl.to_ulid_string())));
+        assert_eq!(lines[2], set("wall", "_name", LineValue::Text("other".into())), "a differing reserved set is kept");
+        assert_eq!(lines[3], LineOp::Delete { seed: "wall".into() });
+        assert_eq!(lines.len(), 4);
+        // Replaying the lines gives the same document as the ops.
+        let (mut a, mut b) = (Document::new(), Document::new());
+        ops.iter().for_each(|op| a.apply(op.clone()).unwrap());
+        lines.iter().for_each(|op| op.apply_to(&mut b).unwrap());
+        assert_eq!(a, b);
     }
 
     #[test]

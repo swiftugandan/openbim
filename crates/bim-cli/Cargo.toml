@@ -20,5 +20,6 @@ bim-doc = { path = "../bim-doc" }
 bim-ifc = { path = "../standards/ifc" }
 bim-model = { path = "../bim-model" }
 bim-schema = { path = "../bim-schema" }
+bim-sketch = { path = "../bim-sketch" }
 bim-store = { path = "../bim-store" }
 bim-sync = { path = "../bim-sync" }
