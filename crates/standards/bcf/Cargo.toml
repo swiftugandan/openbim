@@ -1,0 +1,12 @@
+[package]
+name = "bim-bcf"
+description = "BCF 3.0 (BIM Collaboration Format): bcfzip reading and writing, topics, comments, viewpoints, Issue mirroring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../../bim-doc" }
+bim-ifc = { path = "../ifc" }
+miniz_oxide = "=0.8.9"

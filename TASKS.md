@@ -354,7 +354,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim export --format ifcjson` and `bim import <dir> f.json` (ifcJSON object list with `type`, `globalId`, nested objects); round trip doc → ifcJSON → doc preserves the content hash; ifcJSON produced from an ifcopenshell file (judge converts) imports with the same element counts and volumes as importing the .ifc.
   - Details: ifcJSON is `{"type":"ifcJSON","version":"0.0.1","schemaIdentifier":"IFC4","data":[…]}`: one object per IfcRoot, `type` = IFC entity name, `globalId` in UUID form (or the 22-char form), lowerCamelCase attributes, references to IfcRoot as `{"type","ref": <globalId>}`, other entities nested inline, typed values `{"type":"IfcLabel","value":…}`. A UUID globalId maps to the same entity id as its 22-char form. (`content_hash` excludes `_created_by`/`_stamp`, spec/schema.md.)
 
-- [ ] T5.6: BCF 3.0 issue tracking
+- [x] T5.6: BCF 3.0 issue tracking
   - Files: Cargo.toml, Cargo.lock, crates/standards/bcf/, crates/bim-cli/
   - Opens: T3.2, T5.2
   - Needs: .oracles/py/bin/python, .oracles/bcf-xsd
