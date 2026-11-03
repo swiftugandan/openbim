@@ -10,6 +10,10 @@
 //! | `Column` | `section_b` (x) × `section_h` (y) centred on (x,y), base to top elevation |
 //! | `Beam` | `section_b` wide centred on the axis × `section_h` deep, top at elevation − `z_offset` |
 //!
+//! Direct-modelling `Shape`s and `ComponentInstance`s (spec/sketch.md) are compiled by [`shape`]:
+//! one element each, the Shape's faces triangulated and placed by its `transform`; closed Shapes
+//! give closed meshes with their exact volume, open surfaces single-sided open meshes.
+//!
 //! Joins are found in plan only: an L-join is two wall endpoints within 1e-6, a T-join a wall
 //! endpoint within 1e-6 of the interior of another wall's centreline. Walls are visited in order of
 //! their names (`_name`). An end on a through wall's interior is T-joined (the first such wall) and
@@ -30,6 +34,7 @@
 
 pub mod gltf;
 pub mod mesh;
+pub mod shape;
 
 use std::collections::HashMap;
 
@@ -48,9 +53,10 @@ pub struct Element {
     pub id: EntityId,
     /// The id the entity was created with (its `_name`, else the id's string form).
     pub name: String,
-    /// The entity kind (`Wall`, `Slab`, `Column`, `Beam`).
+    /// The entity kind (`Wall`, `Slab`, `Column`, `Beam`, `Shape`, `ComponentInstance`).
     pub kind: String,
-    /// Closed, outward-oriented boundary mesh in the model frame (metres, z up).
+    /// Boundary mesh in the model frame (metres, z up): closed and outward-oriented for every
+    /// building element and every closed Shape; an open-surface Shape's mesh is open.
     pub mesh: Mesh,
 }
 
@@ -433,8 +439,9 @@ fn opening_slot(doc: &Document, op: &Entity, w: &WallIn) -> Option<Slot> {
 // ------------------------------------------------------------------ compile
 
 impl Model {
-    /// Compiles every Wall, Slab, Column and Beam of `doc`. Never panics on bad input: an element
-    /// that cannot be built is left out.
+    /// Compiles every Wall, Slab, Column and Beam of `doc`, and every placed Shape and
+    /// ComponentInstance ([`shape::shape_elements`]). Never panics on bad input: an element that
+    /// cannot be built is left out.
     pub fn compile(doc: &Document) -> Model {
         let mut model = Model::default();
         let mut ents: Vec<&Entity> = doc.entities().collect();
@@ -525,6 +532,7 @@ impl Model {
                 _ => {}
             }
         }
+        model.elements.extend(shape::shape_elements(doc));
         model.elements.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         model
     }

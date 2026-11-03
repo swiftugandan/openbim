@@ -1903,3 +1903,53 @@ fn concurrent_syncs_through_one_server_converge() {
         assert_eq!(show(dir, "shared"), winner);
     }
 }
+
+// ------------------------------------------------------------------ bim sketch (spec/sketch.md)
+
+#[test]
+fn sketch_applies_the_spec_example_atomically_and_exports_it() {
+    let s = Scratch::new();
+    let dir = s.project("sk", "");
+    let file = s.write(
+        "box.json",
+        r#"{"schema": 1, "commands": [
+          {"op": "rect", "shape": "box", "corner": [0, 0, 0], "u": [4, 0, 0], "v": [0, 3, 0]},
+          {"op": "pushpull", "shape": "box", "face": 1, "distance": 2.5}]}"#,
+    );
+    let run = bim(&[&"sketch", &dir, &file]).expect(0);
+    assert_eq!((run.out.as_str(), run.err.as_str()), ("", ""));
+    let shown = show(&dir, "box");
+    assert!(shown.starts_with(r#"{"id":"box","kind":"Shape","props":{"#), "{shown}");
+    assert!(shown.contains(r#""face_ids":[1.0,2.0,3.0,4.0,5.0,6.0]"#), "{shown}");
+    assert!(shown.contains(r#""edges":[]"#), "{shown}");
+    let Json::Object(doc) = json::parse(&shown).unwrap() else { panic!() };
+    let Json::Object(props) = &doc.iter().find(|(k, _)| k == "props").unwrap().1 else { panic!() };
+    let Json::Array(vertices) = &props.iter().find(|(k, _)| k == "vertices").unwrap().1 else { panic!() };
+    assert_eq!(vertices.len(), 24, "8 vertices");
+    // The journal replays to the same document, and a second command file edits the Shape in place.
+    let h = hash(&dir);
+    assert_eq!(hash(&dir), h);
+    let more = s.write("more.json", r#"{"schema": 1, "commands": [{"op": "pushpull", "shape": "box", "face": 1, "distance": -1}]}"#);
+    bim(&[&"sketch", &dir, &more]).expect(0);
+    assert_ne!(hash(&dir), h);
+    // Invalid files change nothing and exit 2.
+    let h = hash(&dir);
+    for text in [
+        r#"{"schema": 1, "commands": [{"op": "pushpull", "shape": "box", "face": 1, "distance": 1}, {"op": "pushpull", "shape": "box", "face": 99, "distance": 1}]}"#,
+        r#"{"schema": 1, "commands": [{"op": "move", "shape": "box", "faces": [1], "vector": [1, 0, 0]}]}"#,
+        r#"{"schema": 1, "commands": [{"op": "rect", "shape": "box", "corner": [0, 0, 0], "u": [1, 0, 0], "v": [1, 1, 0]}]}"#,
+        r#"{"schema": 1"#,
+        r#"{"schema": 1, "ops": []}"#,
+    ] {
+        let bad = s.write("bad.json", text);
+        bim(&[&"sketch", &dir, &bad]).rejected();
+        assert_eq!(hash(&dir), h, "{text}");
+    }
+    bim(&[&"sketch", &dir, &s.path("missing.json")]).rejected();
+    bim(&[&"sketch", &s.path("nope"), &file]).rejected();
+    // The Shape is exported as one closed glTF mesh node.
+    let out = s.path("box.gltf");
+    bim(&[&"export", &dir, &"--format", &"gltf", &"--out", &out]).expect(0);
+    let text = fs::read_to_string(&out).unwrap();
+    assert!(text.contains(r#""extras":{"id":"box","kind":"Shape"}"#), "{text}");
+}

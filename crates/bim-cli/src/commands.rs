@@ -103,6 +103,36 @@ pub(crate) fn apply(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     Ok(0)
 }
 
+/// `bim sketch <dir> <file.json>`: applies the direct-modelling commands of the file
+/// (spec/sketch.md) through `bim_sketch::apply`, which turns the whole file into document ops or
+/// rejects it (exit 2, nothing changed): a malformed file, an unknown or unimplemented op, a
+/// command naming a face, edge or vertex the Shape does not have, a field constraint broken. The
+/// ops are journalled like those of `bim apply`, naming each Shape by the name the file gave it.
+pub(crate) fn sketch(args: &[OsString], _out: &mut dyn Write) -> Outcome {
+    let [dir, file] = operands::<2>(args, "sketch <dir> <file.json>")?;
+    let (dir, file) = (Path::new(dir), Path::new(file));
+    let shown = file.display();
+    let bytes = fs::read(file).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let text = String::from_utf8(bytes).map_err(|_| CliError::Input(format!("{shown}: not valid UTF-8")))?;
+    let project = Project::open(dir)?;
+    let outcome = bim_sketch::apply(&project.doc, &text).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let name = |id: bim_doc::EntityId| -> String {
+        outcome
+            .names
+            .get(&id)
+            .cloned()
+            .or_else(|| project.written_name(id).map(str::to_string))
+            .unwrap_or_else(|| id.to_ulid_string())
+    };
+    let ops = LineOp::from_doc_ops(&outcome.ops, &name);
+    let mut scratch = project.doc.clone();
+    for op in &ops {
+        op.apply_to(&mut scratch).map_err(|e| CliError::Input(format!("{shown}: {}", op.describe_error(&e))))?;
+    }
+    project.apply_ops(&ops, &scratch)?;
+    Ok(0)
+}
+
 /// The kind rules of spec/schema.md (Extension kinds) for one op, checked against `doc` as it
 /// stands when the op is reached (so an entity created earlier in the same file is known):
 ///

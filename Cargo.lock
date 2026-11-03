@@ -38,6 +38,7 @@ dependencies = [
  "bim-ifc",
  "bim-model",
  "bim-schema",
+ "bim-sketch",
  "bim-store",
  "bim-sync",
 ]
@@ -72,6 +73,7 @@ version = "0.1.0"
 dependencies = [
  "bim-doc",
  "bim-geom",
+ "bim-sketch",
 ]
 
 [[package]]
@@ -79,6 +81,14 @@ name = "bim-schema"
 version = "0.1.0"
 dependencies = [
  "bim-doc",
+]
+
+[[package]]
+name = "bim-sketch"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-geom",
 ]
 
 [[package]]
