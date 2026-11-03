@@ -364,7 +364,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-bcf`: topics, comments, viewpoints (camera, components by IfcGuid derived as in T5.2), `Issue` entities mirrored in the document; `bim bcf` create/export/import per spec/cli.md. Judge validates every XML file in the bcfzip against the official buildingSMART BCF 3.0 XSDs with xmlschema and checks import(export(x)) preserves topics, comments and components.
   - Details: `bim bcf <dir> create --title <t> --entity <id> [<id>…]` prints the new topic Guid as its last stdout line; the mirrored Issue's id is that Guid (as a seed), `status` = TopicStatus, `entities` = Refs to the components. Component IfcGuids are derived as in T5.2. import(export(x)) preserves topic Guid, title, type, status, creation date (as an instant), author, description, labels; comments (Guid, date, author, text, viewpoint link); and each viewpoint's component IfcGuids. A non-zip or a reference to a missing entity exits 2 with nothing applied. `bim bcf import` mirrors every imported topic the same way (Issue id = topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to its viewpoint components).
 
-- [ ] T5.7: declarative code-rule packs (IBC, Eurocode, accessibility), hot-swappable
+- [x] T5.7: declarative code-rule packs (IBC, Eurocode, accessibility), hot-swappable
   - Files: Cargo.toml, Cargo.lock, crates/standards/codes/, crates/bim-cli/
   - Opens: T4.3, T4.1
   - Builder: sonnet

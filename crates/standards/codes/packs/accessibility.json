@@ -1,0 +1,5 @@
+{"pack": "accessibility", "version": "1", "rules": [
+  {"id": "ACC-door-clear-width", "applies_to": "Opening", "where": {"kind": "door"}, "check": "min_width", "limit": 0.85},
+  {"id": "ACC-corridor-width", "applies_to": "Space", "where": {"use": "corridor"}, "check": "min_width", "limit": 1.5},
+  {"id": "ACC-ramp-slope", "applies_to": "Ramp", "check": "slope_max", "limit": 0.08333333333333333}
+]}

@@ -1,8 +1,9 @@
 //! The trades and standards of `bim`, resolved only through a [`bim_plugin::Registry`]:
 //!
 //! * [`registry`] registers the shipped engines (the `arch` trade, [`bim_arch::ArchEngine`], and
-//!   the `struct` trade, [`bim_struct::StructEngine`], and the `mep` trade, [`bim_mep::MepEngine`]);
-//!   `bim-plugin` itself has no built-ins.
+//!   the `struct` trade, [`bim_struct::StructEngine`], and the `mep` trade, [`bim_mep::MepEngine`])
+//!   and the shipped declarative code packs (`ibc`, `eurocode`, `accessibility`:
+//!   [`bim_codes::shipped`]); `bim-plugin` itself has no built-ins.
 //! * `bim solve <dir> --trade <trade> [--method newton|hardy-cross] [--json]` looks the trade up
 //!   with [`Registry::engine`] and prints its result: with `--json` as one JSON document, without
 //!   it as text, one line per element of each list in the result (`wall W1 volume 2.4 side_area
@@ -11,11 +12,15 @@
 //!   any other trade, is a usage error (exit 2).
 //! * `bim validate <dir> [--standard <pack>] [--json]` reports the dangling refs, the materialized
 //!   `ConflictDiagnostic` entities and, with `--standard`, the violations of that rule set; exit 1
-//!   if there is any. `<pack>` is a registered rule-set id, else the path of an existing file,
-//!   which is loaded as a `rule-set` WebAssembly component ([`WasmRuleSet`]), registered under its
-//!   `id()` and then looked up by that id; anything else, and a file that is not a valid
-//!   `rule-set` component, exits 2. A trap, fuel or time exhaustion or memory failure of the
-//!   component exits 3 with a message. Plugins never change the document.
+//!   if there is any. `<pack>` is a registered rule-set id (`ibc`, `eurocode`, `accessibility`:
+//!   declarative packs, re-read from their files on every run), else the path of an existing file:
+//!   a declarative JSON pack ([`PackRuleSet`], spec/plugins.md; a file with the extension `.json`
+//!   or whose first non-blank character is `{`, read afresh on every run), else a `rule-set`
+//!   WebAssembly component ([`WasmRuleSet`]). Either is registered under its `id()` (a pack's
+//!   `pack`) and then looked up by that id. Anything else, a malformed pack, a pack with an unknown
+//!   `check` or an invalid rule, and a file that is not a valid `rule-set` component, exits 2,
+//!   before anything is printed. A trap, fuel or time exhaustion or memory failure of a wasm
+//!   component exits 3 with a message. Plugins and packs never change the document.
 //!
 //! `--json` prints `{"violations":[{"rule","entity","message","measured","limit"}],
 //! "dangling":[{"source","key","target"}],"conflicts":[{"id","entity","key","target","reason"}]}`
@@ -24,12 +29,14 @@
 //! existed), `violation <rule> <entity> <measured> <limit> <message>`, `conflict <id>`.
 
 use std::ffi::OsString;
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 
 use bim_arch::ArchEngine;
+use bim_codes::PackRuleSet;
 use bim_mep::{Method, MepEngine};
-use bim_plugin::{Registry, StandardRuleSet, Violation, WasmRuleSet};
+use bim_plugin::{EngineError, Registry, StandardRuleSet, Violation, WasmRuleSet};
 
 use crate::commands::emit;
 use crate::geometry::parse;
@@ -45,6 +52,9 @@ pub(crate) fn registry() -> Registry {
     registry.register_engine(Box::new(ArchEngine::new()));
     registry.register_engine(Box::new(bim_struct::StructEngine::new()));
     registry.register_engine(Box::new(MepEngine::new()));
+    for rule_set in bim_codes::shipped() {
+        registry.register_rule_set(rule_set); // lazy: a pack file is read when the rule set runs
+    }
     registry
 }
 
@@ -188,7 +198,8 @@ pub(crate) fn validate(args: &[OsString], out: &mut dyn Write) -> Outcome {
 }
 
 /// Resolves `--standard <pack>` to the id of a rule set in `registry`: a registered id as is, else
-/// an existing file, loaded as a `rule-set` component and registered under its id.
+/// an existing file, read once and loaded as a declarative pack ([`is_declarative_pack`]) or as a
+/// `rule-set` component, and registered under its id.
 fn resolve_standard(registry: &mut Registry, pack: &OsString) -> Result<String, CliError> {
     if let Some(id) = pack.to_str().filter(|id| registry.rule_set(id).is_some()) {
         return Ok(id.to_string());
@@ -200,10 +211,27 @@ fn resolve_standard(registry: &mut Registry, pack: &OsString) -> Result<String, 
             pack.to_string_lossy()
         )));
     }
-    let rule_set = WasmRuleSet::load(path).map_err(CliError::Engine)?;
+    let origin = path.display().to_string();
+    let bytes = fs::read(path).map_err(|e| CliError::Engine(EngineError::Input(format!("{origin}: {e}"))))?;
+    let rule_set: Box<dyn StandardRuleSet> = if is_declarative_pack(path, &bytes) {
+        Box::new(PackRuleSet::from_bytes(&bytes, &origin).map_err(CliError::Engine)?)
+    } else {
+        Box::new(WasmRuleSet::from_bytes(&bytes, &origin).map_err(CliError::Engine)?)
+    };
     let id = rule_set.id().to_string();
-    registry.register_rule_set(Box::new(rule_set));
+    registry.register_rule_set(rule_set);
     Ok(id)
+}
+
+/// Whether the file at `path` with contents `bytes` is meant as a declarative JSON pack rather than
+/// a WebAssembly component: its extension is `.json` (in any case) or its first byte that is not
+/// white space, after an optional UTF-8 byte-order mark, is `{`. A component starts with `\0asm`.
+fn is_declarative_pack(path: &Path, bytes: &[u8]) -> bool {
+    if path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+        return true;
+    }
+    let body = bytes.strip_prefix(b"\xef\xbb\xbf").unwrap_or(bytes);
+    body.iter().find(|b| !b.is_ascii_whitespace()) == Some(&b'{')
 }
 
 fn write_violation(s: &mut String, v: &Violation) {
@@ -272,13 +300,18 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_has_arch_struct_and_mep_and_no_rule_sets() {
+    fn the_registry_has_arch_struct_mep_and_the_shipped_packs() {
         let registry = registry();
         assert_eq!(registry.engine("arch").map(|e| e.name()), Some("arch"));
         assert_eq!(registry.engine("struct").map(|e| e.name()), Some("struct"));
         assert_eq!(registry.engine("mep").map(|e| e.name()), Some("mep"));
         assert!(registry.engine("nope").is_none());
+        for id in ["ibc", "eurocode", "accessibility"] {
+            assert_eq!(registry.rule_set(id).map(|r| r.id()), Some(id));
+            assert!(registry.engine(id).is_none(), "{id} is a pack, not a trade");
+        }
         assert!(registry.rule_set("arch").is_none());
+        assert!(registry.rule_set("nope").is_none());
     }
 
     #[test]
@@ -383,5 +416,133 @@ mod tests {
         }
         assert_eq!(run(&["validate", d, "--standard"]).0, 2);
         assert_eq!(run(&["validate", d, "--standard", "a", "--standard", "b"]).0, 2);
+    }
+
+    /// A project with one 5 m wall and a 0.8 m door in it; returns the project directory.
+    fn project_with_a_door(tmp: &TempDir) -> String {
+        let dir = tmp.path().join("door-project");
+        let d = dir.to_str().unwrap().to_string();
+        assert_eq!(run(&["init", &d]).0, 0);
+        let ops = tmp.path().join("door.ops.json");
+        fs::write(
+            &ops,
+            r#"{"schema":1,"ops":[
+              {"op":"create","id":"L","kind":"Level","props":{"elevation":0}},
+              {"op":"create","id":"T","kind":"WallType","props":{"layer_thickness":[0.2]}},
+              {"op":"create","id":"W","kind":"Wall","props":{"level":{"ref":"L"},"type":{"ref":"T"},"x1":0,"y1":0,"x2":5,"y2":0,"height":3}},
+              {"op":"create","id":"D","kind":"Opening","props":{"host":{"ref":"W"},"kind":"door","offset":1,"sill":0,"width":0.8,"height":2.1}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(run(&["apply", &d, ops.to_str().unwrap()]).0, 0);
+        d
+    }
+
+    const CLEAN: &str = "{\"violations\":[],\"dangling\":[],\"conflicts\":[]}\n";
+
+    fn door_pack(limit: &str) -> String {
+        format!(
+            r#"{{"pack":"mine","rules":[{{"id":"R-door","applies_to":"Opening","where":{{"kind":"door"}},"check":"min_width","limit":{limit}}}]}}"#
+        )
+    }
+
+    #[test]
+    fn the_shipped_packs_are_standards_by_id() {
+        let tmp = TempDir::new();
+        let dir = tmp.path().join("empty");
+        let d = dir.to_str().unwrap();
+        assert_eq!(run(&["init", d]).0, 0);
+        for id in ["ibc", "eurocode", "accessibility"] {
+            let (code, out, err) = run(&["validate", d, "--standard", id, "--json"]);
+            assert_eq!((code, out.as_str()), (0, CLEAN), "{id}: {err}");
+        }
+        let d = project_with_a_door(&tmp);
+        let (code, out, err) = run(&["validate", &d, "--standard", "ibc", "--json"]);
+        assert_eq!(code, 1, "{err}");
+        assert_eq!(
+            out,
+            "{\"violations\":[{\"rule\":\"IBC-1010.1.1\",\"entity\":\"D\",\"message\":\"Opening D: min_width 0.8 < limit 0.813\",\"measured\":0.8,\"limit\":0.813}],\"dangling\":[],\"conflicts\":[]}\n"
+        );
+        let (code, out, _) = run(&["validate", &d, "--standard", "accessibility"]);
+        assert_eq!((code, out.as_str()), (1, "violation ACC-door-clear-width D 0.8 0.85 Opening D: min_width 0.8 < limit 0.85\n"));
+        assert_eq!(run(&["validate", &d, "--standard", "eurocode", "--json"]).1, CLEAN);
+    }
+
+    #[test]
+    fn validate_with_a_json_pack_path_reads_it_afresh_every_run() {
+        let tmp = TempDir::new();
+        let d = project_with_a_door(&tmp);
+        let pack = tmp.path().join("mine.json");
+        let p = pack.to_str().unwrap();
+        fs::write(&pack, door_pack("0.85")).unwrap();
+        let (code, out, err) = run(&["validate", &d, "--standard", p, "--json"]);
+        assert_eq!(code, 1, "{err}");
+        assert_eq!(
+            out,
+            "{\"violations\":[{\"rule\":\"R-door\",\"entity\":\"D\",\"message\":\"Opening D: min_width 0.8 < limit 0.85\",\"measured\":0.8,\"limit\":0.85}],\"dangling\":[],\"conflicts\":[]}\n"
+        );
+        let (code, out, _) = run(&["validate", &d, "--standard", p]);
+        assert_eq!((code, out.as_str()), (1, "violation R-door D 0.8 0.85 Opening D: min_width 0.8 < limit 0.85\n"));
+        // Edited between two runs: the next run sees the new limit.
+        fs::write(&pack, door_pack("0.75")).unwrap();
+        assert_eq!(run(&["validate", &d, "--standard", p, "--json"]), (0, CLEAN.to_string(), String::new()));
+        // A pack that is named like a shipped one stands in for it, for that run only.
+        fs::write(&pack, r#"{"pack":"ibc","rules":[]}"#).unwrap();
+        assert_eq!(run(&["validate", &d, "--standard", p, "--json"]).1, CLEAN);
+        assert_eq!(run(&["validate", &d, "--standard", "ibc", "--json"]).0, 1);
+    }
+
+    #[test]
+    fn a_pack_is_recognised_by_its_content_when_it_has_no_json_extension() {
+        let tmp = TempDir::new();
+        let d = project_with_a_door(&tmp);
+        let pack = door_pack("0.85");
+        for (name, content) in [
+            ("rules.pack", pack.clone()),
+            ("rules", format!("  \n\t{pack}")),
+            ("bom.txt", format!("\u{feff}{pack}")),
+            ("RULES.JSON", pack.clone()),
+            ("rules.wasm", pack.clone()), // a wasm component starts with \0asm, never with `{`
+        ] {
+            let path = tmp.path().join(name);
+            fs::write(&path, content).unwrap();
+            let (code, out, err) = run(&["validate", &d, "--standard", path.to_str().unwrap()]);
+            assert_eq!((code, out.as_str()), (1, "violation R-door D 0.8 0.85 Opening D: min_width 0.8 < limit 0.85\n"), "{name}: {err}");
+        }
+    }
+
+    #[test]
+    fn malformed_packs_and_unknown_checks_exit_2_before_any_output() {
+        let tmp = TempDir::new();
+        let d = project_with_a_door(&tmp);
+        let pack = tmp.path().join("bad.json");
+        let door = r#"{"id":"R","applies_to":"Opening","check":"min_width","limit":0.85}"#;
+        for text in [
+            format!(r#"{{"pack":"p","rules":[{door},{{"id":"B","applies_to":"Space","check":"max_banana","limit":1}}]}}"#),
+            r#"{"pack": "broken", "rules": ["#.to_string(),
+            r#"{"pack":"p","rules":[{"id":"R","applies_to":"Wall","check":"riser_max","limit":1}]}"#.to_string(),
+            r#"{"pack":"p","rules":[{"id":"R","applies_to":"Stair","check":"blondel","limit":1}]}"#.to_string(),
+            r#"{"pack":"p","rules":[{"id":"R","applies_to":"Stair","check":"riser_max","limit":"1"}]}"#.to_string(),
+            format!(r#"{{"pack":"p","rules":[{door},{door}]}}"#),
+            r#"{"rules":[]}"#.to_string(),
+            "[]".to_string(),
+            String::new(),
+        ] {
+            fs::write(&pack, &text).unwrap();
+            for flags in [&["--json"][..], &[][..]] {
+                let mut args = vec!["validate", d.as_str(), "--standard", pack.to_str().unwrap()];
+                args.extend_from_slice(flags);
+                let (code, out, err) = run(&args);
+                assert_eq!((code, out.as_str()), (2, ""), "{text}: {err}");
+                assert!(err.contains("bad.json"), "{err}");
+            }
+        }
+        // Not UTF-8 text, and a file that is neither a pack nor a component.
+        fs::write(&pack, b"{\"pack\":\"\xff\"}").unwrap();
+        assert_eq!(run(&["validate", &d, "--standard", pack.to_str().unwrap()]).0, 2);
+        let other = tmp.path().join("other.bin");
+        fs::write(&other, b"\0asm\x01\0\0\0").unwrap();
+        assert_eq!(run(&["validate", &d, "--standard", other.to_str().unwrap()]).0, 2);
+        assert_eq!(run(&["validate", &d, "--standard", tmp.path().to_str().unwrap()]).0, 2, "a directory");
     }
 }

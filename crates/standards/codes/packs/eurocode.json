@@ -1,0 +1,4 @@
+{"pack": "eurocode", "version": "2023", "rules": [
+  {"id": "EC-stair-blondel", "applies_to": "Stair", "check": "blondel", "limit": [0.60, 0.65]},
+  {"id": "EC-wall-u-value", "applies_to": "Wall", "check": "u_value_max", "limit": 0.35}
+]}
