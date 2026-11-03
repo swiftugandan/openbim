@@ -122,8 +122,8 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-geom`: `Point2/Point3/Vec3` (f64), robust `orient2d`, `orient3d`, `incircle` (adaptive exact arithmetic: correct sign for all f64 inputs), `Polygon { outer, holes }` with `area`, `contains`, `triangulate` (ear clipping with holes, returns index triples). `Solid` = closed half-edge mesh with planar polygonal faces: `extrude(&Polygon, z0, height)`, `sweep(&Polygon, path: &[Point3])` (profile in the plane normal to the path start, mitred at each path vertex), `volume`, `area`, `centroid`, `is_closed_manifold`, `euler_characteristic` (V − E + F, = 2 for genus 0), `to_stl(&Path)` ASCII. Judge compares against trimesh on exported STL and closed forms.
   - Details: `Point2 { x, y }`, `Point3 { x, y, z }`, `Vec3 { x, y, z }` are Copy with pub f64 fields and `new`. `orient2d(a, b, c)`, `orient3d(a, b, c, d)`, `incircle(a, b, c, d)` are crate-root functions taking points by value, returning f64 with exact sign for |coords| in {0} ∪ [2^-100, 2^100] (Shewchuk conventions: orient2d > 0 for CCW; orient3d = det[a−d; b−d; c−d] > 0 when d is below CCW abc; incircle > 0 when d is inside CCW abc). `Polygon { pub outer: Vec<Point2>, pub holes: Vec<Vec<Point2>> }`, outer CCW, holes CW; `area()` net positive; `contains(&self, p: Point2) -> bool` (boundary unspecified); `triangulate(&self) -> Vec<[usize; 3]>` indexes outer ++ holes in order, edge-to-edge, no added points. `Solid::extrude(&Polygon, z0, height) -> Solid` and `Solid::sweep(&Polygon, path: &[Point3]) -> Solid` are associated functions; sweep puts the profile's 2D origin on `path[0]`. Methods `volume()`, `area()`, `centroid() -> Point3`, `is_closed_manifold()`, `euler_characteristic()` (integer), `to_stl(&self, path: &Path) -> io::Result<()>` (ASCII, round-trip precision, watertight edge-to-edge triangulation).
 
-- [!] T2.2: Boolean CSG on closed polyhedral B-Reps
-  - Blocked: union/difference of sweeps sharing a leg gives folded Ok results (non-watertight STL, wrong face_count) and chained ops Err
+- [x] T2.2: Boolean CSG on closed polyhedral B-Reps
+  - Known issue: #24 (landed with this bug on purpose; its audit failed, its judge passes)
   - Files: Cargo.lock, crates/bim-geom/
   - Opens: T2.1
   - Needs: .oracles/py/bin/python
@@ -147,8 +147,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Extend bim-solver (T1.3 API unchanged): `Sketch3::new()`, `add_point3(x,y,z)`, `add_datum(Plane { normal, offset })`; constraints `Coincident3, Distance3, Parallel3, Perpendicular3, Angle3, OnDatum(point, datum)` (datum-locked). Equations are built as expression trees and differentiated symbolically (`Expr::diff`), not by finite differences. `decompose() -> Vec<Subsystem>` splits the constraint graph into independently solvable components (connected components, then rigid-cluster ordering), and `solve()` returns `SolveReport3 { subsystems: Vec<SubReport { points, status, dof }> }` so under/over-constrained parts are reported individually. Judge compares DOF counts and solved positions with python-solvespace.
   - Details: `Sketch3::add_point3(x, y, z) -> Point3Id`, `add_datum(Plane { normal: [f64; 3], offset: f64 }) -> DatumId` (plane {p : normal·p = offset}), `add(c: Constraint3)`, `point3(id) -> (f64, f64, f64)`; `Point3Id`, `DatumId` derive Debug, Clone, Copy, PartialEq. `Constraint3` is a new enum (2D `Constraint` unchanged): `Coincident3(p, q)`, `Distance3(p, q, d)`, `Parallel3(a, b, c, d)`, `Perpendicular3(a, b, c, d)`, `Angle3(a, b, c, d, θ)` (unsigned, radians in [0, π]), `OnDatum(p, datum)`; datums are fixed. `Expr` is Clone with `Expr::var(i)`, `Expr::constant(c)`, `sqrt(self)`, `+ - * /` and unary `-` on owned `Expr`, `diff(&self, var) -> Expr`, `eval(&self, &[f64]) -> f64`. `decompose(&self) -> Vec<Subsystem>`, `Subsystem { points: Vec<Point3Id>, .. }`: connected components of the graph joining each constraint's points (an unconstrained point is its own subsystem); `SolveReport3.subsystems` has the same partition. Per subsystem dof = 3·points − rank(J); status uses T1.3's tolerances: Inconsistent if residual > 1e-6, else UnderConstrained if dof > 0, else OverConstrained if some constraint is redundant (removing its equations leaves rank(J) unchanged), else WellConstrained. Solving one subsystem never moves another's points; an Inconsistent subsystem does not stop the others solving.
 
-- [!] T2.5: analytical plane sectioning of solids
-  - Blocked: Opens T2.2, which is blocked
+- [ ] T2.5: analytical plane sectioning of solids
   - Files: Cargo.lock, crates/bim-geom/
   - Opens: T2.2
   - Needs: .oracles/py/bin/python
@@ -156,8 +155,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim_geom::section(&Solid, &Plane3) -> Vec<Polygon3>` closed loops on the plane, outer loops CCW about the plane normal, holes CW, nested correctly; `section_area`. Handles planes through vertices, edges and coplanar faces (coplanar faces are included as section regions). Judge compares with trimesh section + shapely areas on random solids and booleans.
   - Details: `Plane3 { pub normal: Vec3, pub offset: f64 }` is the plane normal·p = offset (normal need not be unit); `Polygon3 { pub outer: Vec<Point3>, pub holes: Vec<Vec<Point3>> }` is one region (closing vertex optional); `section_area(&Solid, &Plane3) -> f64` is the total enclosed area; a plane meeting the solid only in edges or vertices yields an empty Vec.
 
-- [!] T2.6: exact hidden-line removal for polyhedral scenes
-  - Blocked: Opens T2.5, which is blocked
+- [ ] T2.6: exact hidden-line removal for polyhedral scenes
   - Files: Cargo.lock, crates/bim-geom/
   - Opens: T2.5, T2.3
   - Needs: .oracles/py/bin/python
@@ -166,8 +164,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim_geom::hlr(solids: &[Solid], view: &OrthoView) -> HlrResult { visible: Vec<Seg2>, hidden: Vec<Seg2> }` for orthographic views (`OrthoView { dir, up }`): feature edges (dihedral > 1e-9) and silhouettes are split at every projected crossing and classified exactly (visibility changes only at crossings), with collinear overlaps merged. Each segment carries the source solid index. Judge: closed-form scenes (cube, stacked boxes, occluding prisms) plus random scenes checked by casting rays from many points on each segment with trimesh.
   - Details: `OrthoView { pub dir: Vec3, pub up: Vec3 }` (dir from eye into the scene); projected coordinates are (p·r, p·v) with r = normalize(dir × up), v = r × normalize(dir); `Seg2 { pub a: Point2, pub b: Point2, pub solid: usize }`; `HlrResult { pub visible: Vec<Seg2>, pub hidden: Vec<Seg2> }`; `hlr`, `OrthoView`, `Seg2`, `HlrResult` at the crate root. Input solids have disjoint interiors (they may touch); edges shared by touching solids are reported once.
 
-- [!] T2.7: building geometry compiler: schema → solids, joins, openings, glTF export
-  - Blocked: Opens T2.2, which is blocked
+- [ ] T2.7: building geometry compiler: schema → solids, joins, openings, glTF export
   - Files: Cargo.toml, Cargo.lock, crates/bim-model/, crates/bim-cli/
   - Opens: T2.2, T1.6
   - Needs: .oracles/py/bin/python, .oracles/node/node_modules/gltf-validator
