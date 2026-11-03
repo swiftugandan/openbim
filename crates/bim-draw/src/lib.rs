@@ -1,7 +1,8 @@
 //! `bim-draw`: 2D drawings of the compiled building (spec/cli.md, "Export, import, drawings").
 //!
 //! [`View::parse`] reads a `--view` string, [`draw`] builds the [`Drawing`] of that view from the
-//! document and its compiled [`Model`], and [`svg::to_svg`] writes it as SVG.
+//! document and its compiled [`Model`], and [`svg::to_svg`], [`dxf::to_dxf`] and [`pdf::to_pdf`]
+//! write it as SVG, DXF (AutoCAD 2013) and PDF 1.7.
 //!
 //! # Views
 //!
@@ -43,6 +44,9 @@
 #![forbid(unsafe_code)]
 
 mod clip;
+pub mod dxf;
+mod paper;
+pub mod pdf;
 pub mod svg;
 
 use bim_doc::{Document, EntityId, Value};
@@ -255,7 +259,7 @@ fn frame(o: &OrthoView) -> [Vec3; 3] {
 }
 
 /// Hatch line spacing in model metres (1.5 mm on paper at 1:100).
-const HATCH_SPACING: f64 = 0.15;
+pub(crate) const HATCH_SPACING: f64 = 0.15;
 
 /// Builds the drawing of `view` from `doc` and its compiled `model` (see the crate docs).
 pub fn draw(doc: &Document, model: &Model, view: &View) -> Drawing {

@@ -180,7 +180,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-draw` builds a `Drawing` (layers, polylines, hatched regions, dimension objects with entity references) for the views in spec/cli.md: cut geometry from T2.5 on layer `CUT` with hatches on `HATCH`, beyond geometry from T2.6 HLR on `PROJECTION`/`HIDDEN`, `Dimension` entities on `DIMENSION`. `bim export --format svg --view …` writes it with the layer ids, stroke widths and `data-entity` attributes of spec/cli.md. Associative: after an edit, the dimension text equals the new measured distance. Judge recomputes cut areas with shapely from manifold3d sections.
   - Details: View geometry, SVG units, ring/hatch, dash, inheritance and Dimension rules are in spec/cli.md ("View geometry").
 
-- [ ] T2.9: DXF and PDF drawing export
+- [x] T2.9: DXF and PDF drawing export
   - Files: Cargo.lock, crates/bim-draw/, crates/bim-cli/
   - Opens: T2.8
   - Needs: .oracles/py/bin/python
