@@ -1,6 +1,7 @@
 //! The trades and standards of `bim`, resolved only through a [`bim_plugin::Registry`]:
 //!
-//! * [`registry`] registers the shipped engines (today the `arch` trade, [`bim_arch::ArchEngine`]);
+//! * [`registry`] registers the shipped engines (the `arch` trade, [`bim_arch::ArchEngine`], and
+//!   the `struct` trade, [`bim_struct::StructEngine`]);
 //!   `bim-plugin` itself has no built-ins.
 //! * `bim solve <dir> --trade <trade> [--json]` looks the trade up with [`Registry::engine`] and
 //!   prints its result: with `--json` as one JSON document, without it as text, one line per
@@ -39,6 +40,7 @@ type Outcome = Result<u8, CliError>;
 pub(crate) fn registry() -> Registry {
     let mut registry = Registry::new();
     registry.register_engine(Box::new(ArchEngine::new()));
+    registry.register_engine(Box::new(bim_struct::StructEngine::new()));
     registry
 }
 

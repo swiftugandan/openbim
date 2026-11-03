@@ -1,9 +1,18 @@
 [package]
 name = "bim-struct"
-description = "Structural analysis engine: 2D and 3D frame direct-stiffness solvers"
+description = "Structural analysis engine: 2D and 3D frame direct-stiffness solvers and the `struct` trade engine"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
 publish = false
 
+# The solvers have no dependencies. The `engine` feature adds the `struct` trade engine
+# (`StructEngine`), which reads the document through bim-plugin; it is off by default so the
+# solvers stay usable on their own (e.g. by external crates that pin a different serde_json).
+[features]
+engine = ["dep:bim-doc", "dep:bim-plugin", "dep:serde_json"]
+
 [dependencies]
+bim-doc = { path = "../../bim-doc", optional = true }
+bim-plugin = { path = "../../bim-plugin", optional = true }
+serde_json = { version = "=1.0.140", features = ["preserve_order"], optional = true }
