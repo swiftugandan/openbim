@@ -188,7 +188,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim export --format dxf|pdf --view …`. DXF: AutoCAD 2013 ASCII (AC1027) with layers named as in spec/cli.md, lineweights, `DASHED` ISO linetype on HIDDEN, HATCH entities, DIMENSION or MTEXT for dimensions, XDATA app `OPENBIM` holding the entity id; ezdxf `audit()` reports zero errors. PDF 1.7 with vector paths, one optional-content group per layer, correct line widths in points; pypdf reads it and finds the OCG names and dimension texts. Geometry equals the SVG export of T2.8 (judge compares coordinates).
   - Details: DXF strokes are LINE, LWPOLYLINE or POLYLINE with BYLAYER (or equal) lineweight; HIDDEN uses BYLAYER or DASHED linetype; every entity not on ANNOTATION carries XDATA `OPENBIM` whose first 1000-code string is the entity id; HATCH entities carry the cut entity's id and fill exactly its cut region; dimension text is explicit (DIMENSION text override, or MTEXT/TEXT on DIMENSION). PDF: one page, every stroke inside `/OC /<name> BDC … EMC` referencing an OCG in the page's `/Resources/Properties`; OCG names are exactly the layer names.
 
-- [ ] T2.10: direct modelling I: shapes, drawing, face finding, push/pull, erase, `bim sketch`
+- [x] T2.10: direct modelling I: shapes, drawing, face finding, push/pull, erase, `bim sketch`
   - Files: Cargo.toml, Cargo.lock, crates/bim-sketch/, crates/bim-model/, crates/bim-cli/
   - Opens: T2.7, T1.8
   - Builder: fable
