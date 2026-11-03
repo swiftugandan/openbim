@@ -98,6 +98,7 @@ version = "0.1.0"
 dependencies = [
  "bim-arch",
  "bim-bcf",
+ "bim-codes",
  "bim-doc",
  "bim-draw",
  "bim-ifc",
@@ -109,6 +110,17 @@ dependencies = [
  "bim-store",
  "bim-struct",
  "bim-sync",
+ "serde_json",
+]
+
+[[package]]
+name = "bim-codes"
+version = "0.1.0"
+dependencies = [
+ "bim-arch",
+ "bim-doc",
+ "bim-model",
+ "bim-plugin",
  "serde_json",
 ]
 
