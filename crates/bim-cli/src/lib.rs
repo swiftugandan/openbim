@@ -6,7 +6,7 @@
 //! | `bim apply <dir> <ops-file>` | appends the file's ops (`*.json`: JSON ops, else the line format; see [`ops`]) to the journal and the store, in one SQLite transaction; all or none. A create of a kind that is neither core nor declared by a trade package, and a create or set that breaks an extension kind's prop declarations, are refused |
 //! | `bim show <dir> <id> --json` | prints the entity as `{"id","kind","props"}` (spec/cli.md) |
 //! | `bim hash <dir>` | prints the document's `content_hash` as 16 lowercase hex digits |
-//! | `bim validate <dir> [--standard <pack>] [--json]` | reports dangling refs (one `dangling <source> <key> <target>` line each), materialized conflicts and, with `--standard`, the violations of a rule set resolved through the [`bim_plugin::Registry`]: a registered id or a `rule-set` WebAssembly component file; `--json` prints `{"violations","dangling","conflicts"}`; exit 1 if any (see the private `engines` module) |
+//! | `bim validate <dir> [--standard <pack>] [--json]` | reports dangling refs (one `dangling <source> <key> <target>` line each), materialized conflicts and, with `--standard`, the violations of a rule set resolved through the [`bim_plugin::Registry`]: a registered id (`ibc`, `eurocode`, `accessibility`: the shipped declarative code packs of `bim-codes`, re-read on every run), the path of a declarative JSON pack (read afresh on every run, so editing it changes the next result with no rebuild), or a `rule-set` WebAssembly component file; `--json` prints `{"violations","dangling","conflicts"}`; exit 1 if any (see the private `engines` module) |
 //! | `bim commit <dir> -m <msg>` | records a revision and prints its id, the content hash at that moment |
 //! | `bim log <dir> --json` | prints `[{"rev","message","ops"}]`, oldest revision first, `ops` the ids of the ops recorded since the previous one |
 //! | `bim diff <dirA> <dirB>` | prints `same` (exit 0) or `differ` (exit 1) |
@@ -29,8 +29,9 @@
 //!   broken extension prop included), an unknown or deleted entity for `show`, an unknown revision, a missing directory, a
 //!   directory that is not a project, a malformed or inconsistent trade package, an unreadable or
 //!   unwritable file, a corrupt journal, an unusable store. Nothing is changed;
-//!   An unknown `--trade` or `--standard`, and a `--standard` file that is not a valid `rule-set`
-//!   component, are usage errors too;
+//!   An unknown `--trade` or `--standard`, a `--standard` file that is not a valid `rule-set`
+//!   component, and a declarative pack that is malformed JSON or has an unknown `check` (or any other invalid rule) are
+//!   usage errors too;
 //! * `3` internal error (a bug in `bim` itself: a panic), or a plugin component that trapped, ran
 //!   out of fuel or time, or hit its memory limit (spec/plugins.md).
 //!

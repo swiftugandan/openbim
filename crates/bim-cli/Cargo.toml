@@ -17,6 +17,7 @@ path = "src/main.rs"
 [dependencies]
 bim-arch = { path = "../engines/arch" }
 bim-bcf = { path = "../standards/bcf" }
+bim-codes = { path = "../standards/codes" }
 bim-doc = { path = "../bim-doc" }
 bim-ifc = { path = "../standards/ifc" }
 bim-model = { path = "../bim-model" }

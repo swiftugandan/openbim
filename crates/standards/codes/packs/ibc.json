@@ -1,0 +1,6 @@
+{"pack": "ibc", "version": "2021", "rules": [
+  {"id": "IBC-1020.2", "applies_to": "Space", "where": {"use": "corridor"}, "check": "min_width", "limit": 1.118},
+  {"id": "IBC-1010.1.1", "applies_to": "Opening", "where": {"kind": "door"}, "check": "min_width", "limit": 0.813},
+  {"id": "IBC-1011.5.2-riser", "applies_to": "Stair", "check": "riser_max", "limit": 0.1778},
+  {"id": "IBC-1011.5.2-tread", "applies_to": "Stair", "check": "tread_min", "limit": 0.2794}
+]}
