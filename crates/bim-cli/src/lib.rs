@@ -15,7 +15,7 @@
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade arch --json` | prints the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); other trades exit 2 (see the private `geometry` module) |
-//! | `bim export <dir> --format gltf --out <file>` | writes the glTF 2.0 model: one closed mesh node per element with `extras.id`, y-up; other formats exit 2 |
+//! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -66,7 +66,7 @@ pub const USAGE: &str = "usage:
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
   bim solve <dir> --trade arch --json
-  bim export <dir> --format gltf --out <file>";
+  bim export <dir> --format gltf|ifc --out <file>";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]

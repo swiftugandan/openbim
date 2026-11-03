@@ -321,7 +321,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Add `"crates/standards/*"` to workspace members. Crate `bim-ifc`: streaming Part 21 lexer/parser (header, entity instances, typed values, lists, enums, `$`, `*`, derived, binary, string escapes incl. `\X2\`), a writer that emits files ifcopenshell parses identically, and typed access to the IFC4 entities needed by T5.2/T5.3. Judge round-trips ifcopenshell-generated files and checks every instance's attributes match via ifcopenshell.
   - Details: `bim_ifc::StepFile::read<R: BufRead>(r) -> Result<StepFile, StepError>`, `StepFile::write<W: Write>(&self, w) -> io::Result<()>`, `StepFile::instances()` iterates `&Instance { id: u64, entity: String /* upper-case */, params: Vec<Param> }`; `pub enum Param { Unset, Derived, Integer(i64), Real(f64), String(String) /* decoded */, Binary(String) /* bit string, unused leading bits dropped */, Enum(String) /* no dots */, Ref(u64), List(Vec<Param>), Typed(String, Box<Param>) }`. The writer keeps instance ids and header fields. Truncated input, a missing `ENDSEC;`/`END-ISO-10303-21;`, unterminated strings and unbalanced parentheses are errors.
 
-- [ ] T5.2: IFC4 export with geometry and property sets
+- [x] T5.2: IFC4 export with geometry and property sets
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
   - Opens: T5.1, T2.7
   - Needs: .oracles/py/bin/python
