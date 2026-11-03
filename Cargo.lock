@@ -74,6 +74,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "bim-arch"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-model",
+ "bim-plugin",
+ "serde_json",
+]
+
+[[package]]
 name = "bim-bcf"
 version = "0.1.0"
 dependencies = [
@@ -86,6 +96,7 @@ dependencies = [
 name = "bim-cli"
 version = "0.1.0"
 dependencies = [
+ "bim-arch",
  "bim-bcf",
  "bim-doc",
  "bim-ifc",
