@@ -155,7 +155,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim_geom::section(&Solid, &Plane3) -> Vec<Polygon3>` closed loops on the plane, outer loops CCW about the plane normal, holes CW, nested correctly; `section_area`. Handles planes through vertices, edges and coplanar faces (coplanar faces are included as section regions). Judge compares with trimesh section + shapely areas on random solids and booleans.
   - Details: `Plane3 { pub normal: Vec3, pub offset: f64 }` is the plane normal·p = offset (normal need not be unit); `Polygon3 { pub outer: Vec<Point3>, pub holes: Vec<Vec<Point3>> }` is one region (closing vertex optional); `section_area(&Solid, &Plane3) -> f64` is the total enclosed area; a plane meeting the solid only in edges or vertices yields an empty Vec.
 
-- [ ] T2.6: exact hidden-line removal for polyhedral scenes
+- [x] T2.6: exact hidden-line removal for polyhedral scenes
   - Files: Cargo.lock, crates/bim-geom/
   - Opens: T2.5, T2.3
   - Needs: .oracles/py/bin/python

@@ -15,10 +15,13 @@
 //!   classification; results are closed 2-manifolds with merged coplanar faces, or empty.
 //! * [`section()`] / [`section_area`] — planar sections of solids as [`Polygon3`] regions with
 //!   holes; coplanar faces are included, edge or vertex contact gives nothing.
+//! * [`hlr()`] — exact hidden-line removal of a scene of solids in an [`OrthoView`]: feature
+//!   edges projected, merged, split at every crossing and classified as visible or hidden.
 
 pub(crate) mod big;
 pub mod boolean;
 pub(crate) mod exact;
+pub mod hlr;
 pub mod polygon;
 pub mod predicates;
 pub(crate) mod region2d;
@@ -27,6 +30,7 @@ pub mod solid;
 pub mod types;
 
 pub use boolean::{boolean, BoolOp, GeomError};
+pub use hlr::{hlr, HlrResult, OrthoView, Seg2};
 pub use polygon::Polygon;
 pub use predicates::{incircle, orient2d, orient3d};
 pub use section::{section, section_area, Plane3, Polygon3};
