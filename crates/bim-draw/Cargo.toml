@@ -1,6 +1,6 @@
 [package]
 name = "bim-draw"
-description = "2D drawings of the compiled building: plans, sections and elevations with layers, hatches and associative dimensions, written as SVG"
+description = "2D drawings of the compiled building: plans, sections and elevations with layers, hatches and associative dimensions, written as SVG, DXF and PDF"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

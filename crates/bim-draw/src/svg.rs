@@ -11,41 +11,14 @@
 
 use std::fmt::Write;
 
-use crate::{Drawing, Layer, Shape, P2, SCALE};
-
-/// Margin around the drawing, paper mm.
-const MARGIN: f64 = 10.0;
-/// Dimension text height, paper mm.
-const TEXT: f64 = 2.5;
-/// Tick half-length and text offset of a dimension, paper mm.
-const TICK: f64 = 1.0;
+use crate::paper::{dim_marks, num, Frame, TEXT};
+use crate::{Drawing, Layer, Shape};
 
 /// The drawing as an SVG document.
 pub fn to_svg(drawing: &Drawing) -> String {
-    let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
-    let mut grow = |p: P2| {
-        for k in 0..2 {
-            lo[k] = lo[k].min(p[k]);
-            hi[k] = hi[k].max(p[k]);
-        }
-    };
-    for it in &drawing.items {
-        match &it.shape {
-            Shape::Region(rings) => rings.iter().flatten().for_each(|&p| grow(p)),
-            Shape::Lines(segs) => segs.iter().flatten().for_each(|&p| grow(p)),
-            Shape::Dimension { a, b, .. } => {
-                grow(*a);
-                grow(*b);
-            }
-        }
-    }
-    if !(lo[0].is_finite() && hi[0].is_finite()) {
-        lo = [0.0, 0.0];
-        hi = [0.0, 0.0];
-    }
-    let width = (hi[0] - lo[0]) * SCALE + 2.0 * MARGIN;
-    let height = (hi[1] - lo[1]) * SCALE + 2.0 * MARGIN;
-    let paper = |p: P2| -> P2 { [(p[0] - lo[0]) * SCALE + MARGIN, (hi[1] - p[1]) * SCALE + MARGIN] };
+    let frame = Frame::of(drawing);
+    let (width, height) = (frame.width, frame.height);
+    let paper = |p| frame.down(p);
 
     let mut s = String::new();
     let _ = writeln!(s, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>");
@@ -87,27 +60,13 @@ pub fn to_svg(drawing: &Drawing) -> String {
                     let _ = writeln!(s, "<path data-entity=\"{ent}\" {common} d=\"{}\"/>", d.trim_end());
                 }
                 Shape::Dimension { a, b, text } => {
-                    let (a, b) = (paper(*a), paper(*b));
-                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
-                    let len = dx.hypot(dy);
-                    // Unit direction along the line and its normal pointing up on paper.
-                    let (ux, uy) = if len > 1e-9 { (dx / len, dy / len) } else { (1.0, 0.0) };
-                    let (mut nx, mut ny) = (uy, -ux);
-                    if ny > 0.0 || (ny == 0.0 && nx < 0.0) {
-                        nx = -nx;
-                        ny = -ny;
-                    }
+                    let marks = dim_marks(paper(*a), paper(*b));
                     let mut d = String::new();
-                    if len > 1e-9 {
-                        let _ = write!(d, "M{} {} L{} {} ", num(a[0]), num(a[1]), num(b[0]), num(b[1]));
-                    }
-                    // 45° architectural ticks at both ends.
-                    let (tx, ty) = ((ux + nx) * TICK * std::f64::consts::FRAC_1_SQRT_2, (uy + ny) * TICK * std::f64::consts::FRAC_1_SQRT_2);
-                    for p in [a, b] {
-                        let _ = write!(d, "M{} {} L{} {} ", num(p[0] - tx), num(p[1] - ty), num(p[0] + tx), num(p[1] + ty));
+                    for [p, q] in &marks.segments {
+                        let _ = write!(d, "M{} {} L{} {} ", num(p[0]), num(p[1]), num(q[0]), num(q[1]));
                     }
                     let _ = writeln!(s, "<path data-entity=\"{ent}\" {common} d=\"{}\"/>", d.trim_end());
-                    let m = [(a[0] + b[0]) / 2.0 + nx * TICK, (a[1] + b[1]) / 2.0 + ny * TICK];
+                    let m = marks.text_at;
                     let _ = writeln!(
                         s,
                         "<text data-entity=\"{ent}\" x=\"{}\" y=\"{}\" font-size=\"{}\" font-family=\"sans-serif\" text-anchor=\"middle\" fill=\"#000\" stroke=\"none\">{}</text>",
@@ -123,23 +82,6 @@ pub fn to_svg(drawing: &Drawing) -> String {
     }
     s.push_str("</svg>\n");
     s
-}
-
-/// A number with at most four decimals, without trailing zeros.
-fn num(x: f64) -> String {
-    let mut t = format!("{:.4}", x);
-    if t.contains('.') {
-        while t.ends_with('0') {
-            t.pop();
-        }
-        if t.ends_with('.') {
-            t.pop();
-        }
-    }
-    if t == "-0" {
-        t = "0".into();
-    }
-    t
 }
 
 fn escape(s: &str) -> String {
@@ -162,11 +104,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn numbers_are_short_and_exact_to_a_tenth_of_a_micron() {
-        assert_eq!(num(1.0), "1");
-        assert_eq!(num(0.25), "0.25");
-        assert_eq!(num(-0.00001), "0");
-        assert_eq!(num(12.34567), "12.3457");
+    fn xml_text_is_escaped() {
         assert_eq!(escape("a<\"&"), "a&lt;&quot;&amp;");
     }
 }

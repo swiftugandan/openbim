@@ -16,7 +16,7 @@
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade <trade> [--method newton\|hardy-cross] [--json]` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document (without `--json`, as one text line per reported element); `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); `mep` the pipe/duct network hydraulics (`bim-mep`), `--method` choosing its network solver; an unknown trade or method exits 2 (see the private `engines` and `geometry` modules) |
 //! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
-//! | `bim export <dir> --format svg --view <view> --out <file>` | writes the 2D drawing of `<view>` (`plan:<level>@<h>`, `section:<x0>,<y0>,<x1>,<y1>`, `elevation:<n\|s\|e\|w>`) built by `bim-draw`: layers CUT, PROJECTION, HIDDEN, HATCH, DIMENSION, ANNOTATION as `<g id>`, paper mm at 1:100, `data-entity` on every element; an unknown or unparseable view exits 2 |
+//! | `bim export <dir> --format svg\|dxf\|pdf --view <view> --out <file>` | writes the 2D drawing of `<view>` (`plan:<level>@<h>`, `section:<x0>,<y0>,<x1>,<y1>`, `elevation:<n\|s\|e\|w>`) built by `bim-draw`: layers CUT, PROJECTION, HIDDEN, HATCH, DIMENSION, ANNOTATION as SVG `<g id>`, DXF layers (AutoCAD 2013, XDATA `OPENBIM` id on every entity) or PDF 1.7 optional content groups, paper mm at 1:100 (PDF in points), `data-entity` on every SVG element; an unknown or unparseable view exits 2 |
 //! | `bim bcf <dir> create --title <t> --entity <id> [<id>…]` | makes a BCF 3.0 topic about those entities, mirrors it as an `Issue` entity (id = the topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to the components) and prints the Guid as its only output line (see the private `bcf` module) |
 //! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
 //! | `bim bcf <dir> import <file.bcfzip>` | mirrors every topic of a BCF 3.0 archive as an `Issue` entity, atomically; a file that is not a BCF 3.0 archive, or a component that is not an entity of the project, exits 2 with nothing applied |
@@ -78,7 +78,7 @@ pub const USAGE: &str = "usage:
   bim sync <dir> <ws-url>
   bim solve <dir> --trade <trade> [--method newton|hardy-cross] --json
   bim export <dir> --format gltf|ifc --out <file>
-  bim export <dir> --format svg --view <view> --out <file>
+  bim export <dir> --format svg|dxf|pdf --view <view> --out <file>
   bim bcf <dir> create --title <t> --entity <id> [<id>…]
   bim bcf <dir> export <file.bcfzip>
   bim bcf <dir> import <file.bcfzip>
