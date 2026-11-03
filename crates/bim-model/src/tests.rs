@@ -210,3 +210,438 @@ fn cross_junction_t_joins_take_precedence() {
     }
     check_closed(&m);
 }
+
+// ------------------------------------------------------------------ curtain walls, stairs, ramps
+
+fn curtain_wall(b: &mut B, name: &str, p: [f64; 4], height: f64, spacing: [f64; 2], mullion: [f64; 2], panel: f64) {
+    b.add(name, "CurtainWall", &[
+        ("level", r("L0")), ("x1", n(p[0])), ("y1", n(p[1])), ("x2", n(p[2])), ("y2", n(p[3])), ("height", n(height)),
+        ("u_spacing", n(spacing[0])), ("v_spacing", n(spacing[1])),
+        ("mullion_width", n(mullion[0])), ("mullion_depth", n(mullion[1])), ("panel_thickness", n(panel)),
+    ]);
+}
+
+fn stair(b: &mut B, name: &str, at: [f64; 3], width: f64, risers: f64, tread: f64) {
+    b.add(name, "Stair", &[
+        ("base", r("L0")), ("top", r("L1")), ("x", n(at[0])), ("y", n(at[1])), ("angle", n(at[2])),
+        ("width", n(width)), ("riser_count", n(risers)), ("tread", n(tread)),
+    ]);
+}
+
+fn ramp(b: &mut B, name: &str, at: [f64; 3], width: f64, length: f64, top: &str) {
+    b.add(name, "Ramp", &[
+        ("base", r("L0")), ("top", r(top)), ("x", n(at[0])), ("y", n(at[1])), ("angle", n(at[2])),
+        ("width", n(width)), ("length", n(length)),
+    ]);
+}
+
+fn levels() -> B {
+    let mut b = B::new();
+    b.add("L0", "Level", &[("elevation", n(1.0))]).add("L1", "Level", &[("elevation", n(4.15))]);
+    b
+}
+
+/// The mesh of `name` in the frame of a run from `(x, y)` along `angle` from `z0`: `(s, l, z)` per
+/// vertex, s along the run, l to its left.
+fn local(m: &Model, name: &str, origin: [f64; 2], angle: f64, z0: f64) -> Vec<[f64; 3]> {
+    let el = m.elements.iter().find(|e| e.name == name).unwrap_or_else(|| panic!("no element {name}"));
+    let (c, s) = (angle.cos(), angle.sin());
+    el.mesh.positions.iter().map(|p| {
+        let (dx, dy) = (p.x - origin[0], p.y - origin[1]);
+        [dx * c + dy * s, -dx * s + dy * c, p.z - z0]
+    }).collect()
+}
+
+/// The (min, max) of one coordinate of `pts`.
+fn span(pts: &[[f64; 3]], k: usize) -> (f64, f64) {
+    pts.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p[k]), hi.max(p[k])))
+}
+
+fn near(a: f64, b: f64) -> bool {
+    (a - b).abs() <= 1e-9 * b.abs().max(1.0)
+}
+
+#[test]
+fn grid_lines_every_spacing_with_the_remainder_in_the_last_bay() {
+    use crate::arch::grid;
+    assert_eq!(grid(5.0, 1.5), [0.0, 1.5, 3.0, 4.5, 5.0]);
+    assert_eq!(grid(6.0, 1.5), [0.0, 1.5, 3.0, 4.5, 6.0], "no zero-width last bay");
+    assert_eq!(grid(1.2, 2.0), [0.0, 1.2], "a spacing beyond the length is one bay");
+    assert_eq!(grid(3.0, 1.25), [0.0, 1.25, 2.5, 3.0]);
+    assert_eq!(grid(3.0, 3.0), [0.0, 3.0]);
+    // Lines are k·spacing, not accumulated: 0.1 · 3 is not 0.1 + 0.1 + 0.1.
+    assert_eq!(grid(1.0, 0.1)[3], 3.0 * 0.1);
+    // A last bay below a billionth of the spacing is absorbed by the one before, a longer one kept.
+    assert_eq!(grid(3.0 + 1e-10, 1.0), [0.0, 1.0, 2.0, 3.0 + 1e-10]);
+    assert_eq!(grid(3.0 + 2e-9, 1.0), [0.0, 1.0, 2.0, 3.0, 3.0 + 2e-9]);
+    // Absurd ratios are clamped (the callers reject them) instead of allocating without bound.
+    assert!(grid(1e300, 1e-300).len() < 100_000);
+}
+
+#[test]
+fn curtain_wall_with_remainder_bays() {
+    // 5 × 3 m wall, bays 1.5 × 1.25: 4 × 3 bays, the last ones 0.5 and 0.5 wide.
+    let (w, d, pt, len, h) = (0.05, 0.15, 0.024, 5.0, 3.0);
+    let mut b = levels();
+    curtain_wall(&mut b, "cw", [1.0, 2.0, 5.0, 5.0], h, [1.5, 1.25], [w, d], pt);
+    let m = Model::compile(&b.0);
+    assert_eq!(m.curtain_walls.len(), 1);
+    let c = &m.curtain_walls[0];
+    assert_eq!((c.name.as_str(), c.panels), ("cw", 12));
+    assert!(near(c.mullion_length, 5.0 * 3.0 + 4.0 * 5.0));
+    // Mullions minus their crossings, plus the panels (spec closed form of the same union).
+    let (nu, nv) = (4.0, 3.0);
+    let panels = pt * (len - nu * w) * (h - nv * w);
+    let expected = w * d * ((nu + 1.0) * h + (nv + 1.0) * len) - d * (nu * w) * (nv * w) + panels;
+    let el = m.element(c.id).unwrap();
+    assert_eq!(el.kind, "CurtainWall");
+    assert!(near(el.mesh.volume(), expected), "{} vs {expected}", el.mesh.volume());
+    assert!(near(c.volume, expected));
+    check_closed(&m);
+    // In the wall's frame: the end verticals stick out by half a mullion, so do the outer
+    // horizontals above and below; the mullions are centred on the centreline.
+    let pts = local(&m, "cw", [1.0, 2.0], (3.0f64).atan2(4.0), 1.0);
+    let (s, l, z) = (span(&pts, 0), span(&pts, 1), span(&pts, 2));
+    assert!(near(s.0, -w / 2.0) && near(s.1, len + w / 2.0), "{s:?}");
+    assert!(near(l.0, -d / 2.0) && near(l.1, d / 2.0), "{l:?}");
+    assert!(near(z.0, -w / 2.0) && near(z.1, h + w / 2.0), "{z:?}");
+}
+
+#[test]
+fn curtain_wall_grids_exact_multiples_and_single_bays() {
+    let mut b = levels();
+    // 6 m / 1.5 and 3 m / 1: no zero-width last bay (4 × 3 bays, 39 m of mullion).
+    curtain_wall(&mut b, "exact", [10.0, 0.0, 16.0, 0.0], 3.0, [1.5, 1.0], [0.06, 0.2], 0.03);
+    // Spacing beyond the wall: one bay each way, pointing down the y axis.
+    curtain_wall(&mut b, "one", [0.0, 10.0, 0.0, 8.8], 1.0, [2.0, 2.0], [0.05, 0.1], 0.02);
+    // Thicker panel than mullion depth, and equal.
+    curtain_wall(&mut b, "thick", [0.0, 0.0, 4.0, 0.0], 3.0, [1.0, 1.0], [0.05, 0.1], 0.3);
+    curtain_wall(&mut b, "equal", [0.0, 5.0, 4.0, 5.0], 3.0, [1.0, 1.0], [0.05, 0.1], 0.1);
+    let m = Model::compile(&b.0);
+    let get = |name: &str| m.curtain_walls.iter().find(|c| c.name == name).unwrap();
+    assert_eq!(get("exact").panels, 12);
+    assert!(near(get("exact").mullion_length, 5.0 * 3.0 + 4.0 * 6.0));
+    assert_eq!(get("one").panels, 1);
+    assert!(near(get("one").mullion_length, 2.0 * 1.0 + 2.0 * 1.2));
+    // 4 × 3 bays. Panels lie between the mullion faces, whatever their thickness (here 3 times the
+    // mullion depth, so they stick out on both sides): the volumes just add.
+    let (nu, nv, w, d, pt, len, h): (f64, f64, f64, f64, f64, f64, f64) = (4.0, 3.0, 0.05, 0.1, 0.3, 4.0, 3.0);
+    let mullions = w * d * ((nu + 1.0) * h + (nv + 1.0) * len) - d * (nu * w) * (nv * w);
+    let pan = pt * (len - nu * w) * (h - nv * w);
+    assert!(near(m.element(get("thick").id).unwrap().mesh.volume(), mullions + pan));
+    assert!(near(m.element(get("equal").id).unwrap().mesh.volume(), mullions + 0.1 * (len - nu * w) * (h - nv * w)));
+    check_closed(&m);
+    assert_eq!(m.curtain_walls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["equal", "exact", "one", "thick"]);
+    // "one" runs along −y: its local frame has x towards −y, so the solid lies at x = 0 ± 0.05.
+    let pts = local(&m, "one", [0.0, 10.0], (-1.2f64).atan2(0.0), 1.0);
+    assert!(near(span(&pts, 0).1, 1.2 + 0.025) && near(span(&pts, 2).0, -0.025));
+}
+
+#[test]
+fn curtain_wall_bays_no_wider_than_a_mullion_have_no_panels() {
+    // Spacing 0.04 under the 0.05 mullions: the mullions merge into plates, no panel anywhere,
+    // and the remainder bay (0.02 m) is covered too.
+    let mut b = levels();
+    curtain_wall(&mut b, "narrow", [0.0, 0.0, 0.5, 0.0], 0.5, [0.04, 0.04], [0.05, 0.1], 0.02);
+    let m = Model::compile(&b.0);
+    let c = &m.curtain_walls[0];
+    assert_eq!(c.panels, 13 * 13);
+    let el = m.element(c.id).unwrap();
+    // A plus-shaped plate: (0.5 + 0.05) × 0.5 + 0.5 × (0.5 + 0.05) − 0.5 × 0.5, 0.1 thick.
+    assert!(near(el.mesh.volume(), 0.1 * (0.55 * 0.5 + 0.5 * 0.55 - 0.25)), "{}", el.mesh.volume());
+    check_closed(&m);
+}
+
+#[test]
+fn curtain_wall_dimensions_at_the_snap_tolerance_never_give_a_pinched_mesh() {
+    let wall = |w: f64| {
+        let mut b = levels();
+        curtain_wall(&mut b, "cw", [0.0, 0.0, 5.0, 0.0], 3.0, [1.5, 1.25], [w, 0.1], 0.02);
+        Model::compile(&b.0)
+    };
+    // Mullions of 0.15 µm: their faces are snapped into the grid lines, which would make the
+    // pieces touch along edges. The quantities stay, there is no solid.
+    let m = wall(1.5e-7);
+    assert_eq!(m.curtain_walls.len(), 1);
+    assert_eq!((m.curtain_walls[0].panels, m.curtain_walls[0].volume), (12, 0.0));
+    assert!(near(m.curtain_walls[0].mullion_length, 35.0) && m.elements.is_empty());
+    // Mullions thinner than the tolerance vanish, and the panels, a nanometre apart, merge into one
+    // plate: 5 m × 3 m × 0.02 m.
+    let m = wall(1e-9);
+    assert_eq!(m.elements.len(), 1);
+    assert!((m.elements[0].mesh.volume() - 0.3).abs() < 1e-6, "{}", m.elements[0].mesh.volume());
+    check_closed(&m);
+    // A tenth of a micron more than the snap (twice) is a proper mullion again.
+    let m = wall(3e-7);
+    assert_eq!(m.elements.len(), 1);
+    check_closed(&m);
+}
+
+#[test]
+fn curtain_wall_is_not_built_from_bad_props_or_oversized_grids() {
+    let ok = |b: &B| {
+        let m = Model::compile(&b.0);
+        (m.curtain_walls.len(), m.elements.len())
+    };
+    let one = |tweak: &dyn Fn(&mut B)| {
+        let mut b = levels();
+        curtain_wall(&mut b, "cw", [0.0, 0.0, 4.0, 0.0], 3.0, [1.0, 1.0], [0.05, 0.1], 0.02);
+        tweak(&mut b);
+        ok(&b)
+    };
+    let set = |b: &mut B, key: &str, v: Value| {
+        b.0.apply(Op::Set { id: EntityId::derive("cw"), key: key.into(), value: v }).unwrap();
+    };
+    assert_eq!(one(&|_| {}), (1, 1));
+    for key in ["height", "u_spacing", "v_spacing", "mullion_width", "mullion_depth", "panel_thickness"] {
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(one(&|b| set(b, key, n(bad))), (0, 0), "{key} = {bad}");
+        }
+        assert_eq!(one(&|b| set(b, key, Value::Text("x".into()))), (0, 0), "{key} as text");
+    }
+    assert_eq!(one(&|b| set(b, "x2", n(0.0))), (0, 0), "zero length");
+    assert_eq!(one(&|b| set(b, "x2", n(1e-10))), (0, 0), "length under 1e-9");
+    assert_eq!(one(&|b| set(b, "y1", n(f64::NAN))), (0, 0));
+    assert_eq!(one(&|b| set(b, "level", r("nope"))), (0, 0), "dangling level");
+    assert_eq!(one(&|b| set(b, "level", r("cw"))), (0, 0), "level that is no Level");
+    // Limits: 256 × 256 bays are built, one bay more is not, and absurd ratios cost nothing.
+    assert_eq!(one(&|b| { set(b, "x2", n(256.0)); set(b, "height", n(256.0)); }).0, 1);
+    assert_eq!(one(&|b| { set(b, "x2", n(257.0)); set(b, "height", n(256.0)); }), (0, 0));
+    assert_eq!(one(&|b| set(b, "u_spacing", n(1e-300))), (0, 0));
+    assert_eq!(one(&|b| set(b, "v_spacing", n(5e-324))), (0, 0));
+    assert_eq!(one(&|b| set(b, "x2", n(1e300))), (0, 0), "a wall of 1e300 m has 1e300 bays");
+    assert_eq!(one(&|b| { set(b, "x2", n(f64::MAX)); set(b, "x1", n(-f64::MAX)); }), (0, 0), "length overflows");
+}
+
+#[test]
+fn stairs_have_exact_risers_and_a_stepped_solid() {
+    let mut b = levels();
+    stair(&mut b, "axis", [20.0, 5.0, 0.0], 1.2, 18.0, 0.28);
+    stair(&mut b, "skew", [-4.0, 3.0, std::f64::consts::FRAC_PI_6], 1.0, 7.0, 0.3);
+    stair(&mut b, "north", [0.0, 0.0, std::f64::consts::FRAC_PI_2], 0.9, 1.0, 0.25);
+    let m = Model::compile(&b.0);
+    assert_eq!(m.stairs.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["axis", "north", "skew"]);
+    let get = |name: &str| m.stairs.iter().find(|s| s.name == name).unwrap();
+    let (rise, risers) = (4.15 - 1.0, 18.0);
+    let s = get("axis");
+    assert_eq!((s.risers, s.tread), (18, 0.28));
+    assert_eq!(s.riser, rise / risers);
+    // Block k is 1.2 wide, 0.28 deep and k risers high: W·t·r·n(n+1)/2.
+    let volume = 1.2 * 0.28 * (rise / risers) * risers * (risers + 1.0) / 2.0;
+    assert!(near(s.volume, volume) && near(m.element(s.id).unwrap().mesh.volume(), volume));
+    check_closed(&m);
+    // Placement: the run starts at (x, y) and goes along `angle`, centred on the run line.
+    for (name, at, angle, width, count, tread) in [
+        ("axis", [20.0, 5.0], 0.0, 1.2, 18.0, 0.28),
+        ("skew", [-4.0, 3.0], std::f64::consts::FRAC_PI_6, 1.0, 7.0, 0.3),
+        ("north", [0.0, 0.0], std::f64::consts::FRAC_PI_2, 0.9, 1.0, 0.25),
+    ] {
+        let pts = local(&m, name, at, angle, 1.0);
+        let (s, l, z) = (span(&pts, 0), span(&pts, 1), span(&pts, 2));
+        assert!(s.0.abs() < 1e-9 && near(s.1, count * tread), "{name}: {s:?}");
+        assert!(near(l.0, -width / 2.0) && near(l.1, width / 2.0), "{name}: {l:?}");
+        assert!(z.0.abs() < 1e-9 && near(z.1, rise), "{name}: {z:?}");
+    }
+    // The single riser is a plain box: 0.9 × 0.25 × 3.15, 12 triangles.
+    let single = m.element(get("north").id).unwrap();
+    assert_eq!(single.mesh.triangles.len(), 12);
+    assert!(near(single.mesh.volume(), 0.9 * 0.25 * rise));
+    assert_eq!(get("north").riser, rise);
+    // Heading north: x ≈ 0 ± 0.45, y from 0 to 0.25.
+    let (lo, hi) = single.mesh.bounds().unwrap();
+    assert!(near(lo.x, -0.45) && near(hi.x, 0.45) && lo.y.abs() < 1e-9 && near(hi.y, 0.25));
+}
+
+#[test]
+fn stairs_are_not_built_from_bad_props() {
+    let one = |tweak: &dyn Fn(&mut B)| {
+        let mut b = levels();
+        stair(&mut b, "st", [0.0, 0.0, 0.0], 1.0, 10.0, 0.3);
+        tweak(&mut b);
+        let m = Model::compile(&b.0);
+        (m.stairs.len(), m.elements.len())
+    };
+    let set = |b: &mut B, key: &str, v: Value| {
+        b.0.apply(Op::Set { id: EntityId::derive("st"), key: key.into(), value: v }).unwrap();
+    };
+    assert_eq!(one(&|_| {}), (1, 1));
+    for (key, bad) in [
+        ("riser_count", 0.0), ("riser_count", -3.0), ("riser_count", 2.5), ("riser_count", 1001.0), ("riser_count", 1e300),
+        ("riser_count", f64::NAN), ("width", 0.0), ("width", -1.0), ("tread", 0.0), ("tread", -0.3), ("x", f64::INFINITY),
+        ("angle", f64::NAN),
+    ] {
+        assert_eq!(one(&|b| set(b, key, n(bad))), (0, 0), "{key} = {bad}");
+    }
+    assert_eq!(one(&|b| set(b, "top", r("L0"))), (0, 0), "top level = base level");
+    assert_eq!(one(&|b| set(b, "top", r("nope"))), (0, 0), "dangling top");
+    assert_eq!(one(&|b| set(b, "base", r("st"))), (0, 0), "base that is no Level");
+    assert_eq!(one(&|b| set(b, "tread", Value::Text("x".into()))), (0, 0));
+    // A downward stair (top below base) is not built either.
+    assert_eq!(one(&|b| b.0.apply(Op::Set { id: EntityId::derive("L1"), key: "elevation".into(), value: n(0.0) }).unwrap()), (0, 0));
+    // The limit itself is built.
+    assert_eq!(one(&|b| set(b, "riser_count", n(1000.0))), (1, 1));
+}
+
+#[test]
+fn ramps_are_wedges_rising_along_the_run() {
+    let mut b = levels();
+    b.add("L2", "Level", &[("elevation", n(2.0))]);
+    ramp(&mut b, "r", [30.0, -2.0, std::f64::consts::FRAC_PI_2], 1.5, 14.4, "L1");
+    ramp(&mut b, "flat", [0.0, 0.0, 0.0], 1.0, 5.0, "L0");
+    ramp(&mut b, "down", [0.0, 0.0, 0.0], 1.0, 5.0, "nope");
+    b.0.apply(Op::Create { id: EntityId::derive("L-1"), kind: "Level".into() }).unwrap();
+    b.0.apply(Op::Set { id: EntityId::derive("L-1"), key: "elevation".into(), value: n(0.0) }).unwrap();
+    ramp(&mut b, "below", [0.0, 0.0, 0.0], 1.0, 5.0, "L-1");
+    let m = Model::compile(&b.0);
+    assert_eq!(m.elements.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["r"]);
+    assert!(m.stairs.is_empty() && m.curtain_walls.is_empty());
+    let e = &m.elements[0];
+    assert_eq!(e.kind, "Ramp");
+    let rise = 4.15 - 1.0;
+    assert!(near(e.mesh.volume(), 1.5 * 14.4 * rise / 2.0), "{}", e.mesh.volume());
+    assert_eq!((e.mesh.positions.len(), e.mesh.triangles.len()), (6, 8));
+    check_closed(&m);
+    // Running north from (30, -2): x within 30 ± 0.75, y from -2 to 12.4; the top is at the far end.
+    let pts = local(&m, "r", [30.0, -2.0], std::f64::consts::FRAC_PI_2, 1.0);
+    let (s, l, z) = (span(&pts, 0), span(&pts, 1), span(&pts, 2));
+    assert!(s.0.abs() < 1e-9 && near(s.1, 14.4) && near(l.0, -0.75) && near(l.1, 0.75) && z.0.abs() < 1e-9 && near(z.1, rise));
+    for p in &pts {
+        assert!(near(p[2].max(0.0), rise * p[0] / 14.4) || p[2].abs() < 1e-9, "{p:?} is neither on the slope nor on the underside");
+    }
+}
+
+// ------------------------------------------------------------------ randomised checks
+
+/// xorshift64*: a deterministic stream of numbers in `[0, 1)`.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> f64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        (self.0.wrapping_mul(0x2545_F491_4F6C_DD1D) >> 11) as f64 / (1u64 << 53) as f64
+    }
+    fn range(&mut self, lo: f64, hi: f64) -> f64 {
+        lo + (hi - lo) * self.next()
+    }
+    fn pick<T: Copy>(&mut self, items: &[T]) -> T {
+        items[(self.next() * items.len() as f64) as usize]
+    }
+}
+
+/// Length of `⋃ [s − w/2, s + w/2]` over the increasing `lines`, clipped to `[lo, hi]`.
+fn strip_union(lines: &[f64], w: f64, lo: f64, hi: f64) -> f64 {
+    let (mut total, mut cursor) = (0.0, lo);
+    for &s in lines {
+        let (a, b) = ((s - w / 2.0).max(lo), (s + w / 2.0).min(hi));
+        if b > a.max(cursor) {
+            total += b - a.max(cursor);
+            cursor = b;
+        }
+    }
+    total
+}
+
+/// The volume of a curtain wall computed from its definition, not from its mesh: the xz regions of
+/// the mullions and of the panels are disjoint, so the volumes of the two prisms just add.
+fn curtain_wall_volume(len: f64, h: f64, spacing: [f64; 2], w: f64, d: f64, pt: f64) -> f64 {
+    let (us, vs) = (crate::arch::grid(len, spacing[0]), crate::arch::grid(h, spacing[1]));
+    let mullions = strip_union(&us, w, f64::MIN, f64::MAX) * h + len * strip_union(&vs, w, f64::MIN, f64::MAX)
+        - strip_union(&us, w, 0.0, len) * strip_union(&vs, w, 0.0, h);
+    let bays = |lines: &[f64]| lines.windows(2).map(|b| (b[1] - b[0] - w).max(0.0)).sum::<f64>();
+    d * mullions + pt * bays(&us) * bays(&vs)
+}
+
+#[test]
+fn random_curtain_walls_stairs_and_ramps_are_closed_manifolds_with_exact_volumes() {
+    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
+    let mut tested = 0;
+    for case in 0..120 {
+        let mut b = levels();
+        // Bays from far wider than a mullion to narrower than one; thick and thin panels.
+        let w = rng.range(0.02, 0.2);
+        let (d, pt) = (rng.range(0.005, 0.4), rng.range(0.002, 0.5));
+        let spacing = [rng.range(0.5 * w, 3.0), rng.range(0.5 * w, 3.0)];
+        let (len, h) = (rng.range(0.1, 12.0), rng.range(0.1, 8.0));
+        let (nu, nv) = (crate::arch::grid(len, spacing[0]).len() as u64 - 1, crate::arch::grid(h, spacing[1]).len() as u64 - 1);
+        if nu * nv > 250 {
+            continue; // fine grids are valid but slow to check in a debug build
+        }
+        tested += 1;
+        let angle = rng.range(-7.0, 7.0);
+        let (x1, y1) = (rng.range(-50.0, 50.0), rng.range(-50.0, 50.0));
+        curtain_wall(&mut b, "cw", [x1, y1, x1 + len * angle.cos(), y1 + len * angle.sin()], h, spacing, [w, d], pt);
+        let risers = (rng.range(1.0, 60.0)).floor();
+        stair(&mut b, "st", [x1, y1, angle], rng.range(0.2, 3.0), risers, rng.range(0.05, 0.6));
+        ramp(&mut b, "rp", [x1, y1, angle], rng.range(0.2, 3.0), rng.range(0.2, 20.0), "L1");
+        let m = Model::compile(&b.0);
+        check_closed(&m);
+        assert_eq!(m.elements.len(), 3, "case {case}");
+
+        let c = &m.curtain_walls[0];
+        let expected = curtain_wall_volume(len, h, spacing, w, d, pt);
+        let mesh_volume = m.element(c.id).unwrap().mesh.volume();
+        assert!((mesh_volume - expected).abs() <= 1e-9 * expected, "case {case}: {mesh_volume} vs {expected}");
+        assert!((c.volume - expected).abs() <= 1e-9 * expected);
+        assert_eq!(c.panels, nu * nv);
+        assert!(near(c.mullion_length, (nu + 1) as f64 * h + (nv + 1) as f64 * len));
+
+        let s = &m.stairs[0];
+        let t = s.tread;
+        let width = match &b.0.get(EntityId::derive("st")).unwrap().props["width"] {
+            Value::Num(x) => *x,
+            _ => unreachable!(),
+        };
+        let expected = width * t * s.riser * risers * (risers + 1.0) / 2.0;
+        assert!((m.element(s.id).unwrap().mesh.volume() - expected).abs() <= 1e-9 * expected, "case {case}");
+        assert_eq!(s.risers as f64, risers);
+        assert_eq!(s.riser, (4.15 - 1.0) / risers);
+    }
+    assert!(tested >= 60, "only {tested} of 120 random cases were small enough to check");
+}
+
+#[test]
+fn compiling_arbitrary_curtain_wall_stair_and_ramp_props_never_panics() {
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    let nums = [
+        0.0, -0.0, 1.0, -1.0, 0.5, 2.5, 3.0, 18.0, 1001.0, 1e-12, 1e-9, 1e-7, 1e-300, 5e-324, 1e9, 1e300,
+        f64::MAX, f64::MIN, f64::NAN, f64::INFINITY, f64::NEG_INFINITY,
+    ];
+    let keys = [
+        ("CurtainWall", ["level", "x1", "y1", "x2", "y2", "height", "u_spacing", "v_spacing", "mullion_width", "mullion_depth", "panel_thickness"]),
+        ("Stair", ["base", "top", "x", "y", "angle", "width", "riser_count", "tread", "", "", ""]),
+        ("Ramp", ["base", "top", "x", "y", "angle", "width", "length", "", "", "", ""]),
+    ];
+    for case in 0..400 {
+        let mut b = levels();
+        let (kind, props) = keys[case % 3];
+        let mut set: Vec<(&str, Value)> = Vec::new();
+        for key in props.iter().filter(|k| !k.is_empty()) {
+            let is_ref = matches!(*key, "level" | "base" | "top");
+            let v = match (rng.next() * 12.0) as u32 {
+                0 => continue, // missing
+                1 => Value::Text("x".into()),
+                2 => Value::Bool(true),
+                3 => Value::List(vec![n(1.0)]),
+                4 => r("nope"),
+                5 | 6 if is_ref => r("L0"),
+                7 | 8 if is_ref => r("L1"),
+                _ if is_ref => r(rng.pick(&["L0", "L1"])),
+                // Mostly modest numbers, so that some elements really are built.
+                9 => n(rng.pick(&nums)),
+                _ => n(rng.range(0.05, 6.0)),
+            };
+            set.push((key, v));
+        }
+        b.add("e", kind, &set);
+        let m = Model::compile(&b.0);
+        check_closed(&m);
+        for c in &m.curtain_walls {
+            assert!(c.mullion_length.is_finite() && c.panels >= 1);
+        }
+        for s in &m.stairs {
+            assert!(s.riser.is_finite() && s.riser > 0.0 && s.risers >= 1);
+        }
+    }
+}

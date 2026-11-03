@@ -2,10 +2,16 @@
 //!
 //! Its result is the `bim solve --trade arch --json` document of spec/cli.md:
 //! `{"rooms":[{"id","level","area","volume","boundary","space"}],"walls":[{"id","volume","side_area",
-//! "layers":[{"material","volume"}]}],"slabs":[{"id","volume","area"}],"stairs":[],"curtain_walls":[]}`.
+//! "layers":[{"material","volume"}]}],"slabs":[{"id","volume","area"}],"stairs":[{"id","riser","tread",
+//! "risers"}],"curtain_walls":[{"id","panels","mullion_length"}]}`.
 //!
-//! * Walls and slabs are the quantities of the compiled geometry ([`bim_model::Model`]): wall and
-//!   per-layer volumes after joins and openings (the material take-off), slab volume and net area.
+//! * Walls, slabs, stairs and curtain walls are the quantities of the compiled geometry
+//!   ([`bim_model::Model`]): wall and per-layer volumes after joins and openings (the material
+//!   take-off), slab volume and net area; for a stair the riser height (top − base elevation) /
+//!   `riser_count`, its `tread` and `risers` (= `riser_count`, an integer); for a curtain wall
+//!   its `panels` (bays along × bays up, an integer) and total `mullion_length`. A stair or curtain
+//!   wall whose props do not describe a valid one (the `bim-model` crate docs say what) is not
+//!   listed, in name order otherwise. Ramps have no quantities.
 //! * Rooms (spec/schema.md "Rooms") are computed per Level from the centrelines of its Walls (the
 //!   walls the geometry compiler builds): the bounded faces of their planar arrangement
 //!   ([`arrangement::bounded_faces`]: split at crossings and T-junctions within
@@ -57,8 +63,12 @@ impl TradeEngine for ArchEngine {
         out.insert("slabs".into(), Json::Array(model.slabs.iter().map(|s| {
             json!({"id": s.name, "volume": num(s.volume), "area": num(s.area)})
         }).collect()));
-        out.insert("stairs".into(), Json::Array(Vec::new()));
-        out.insert("curtain_walls".into(), Json::Array(Vec::new()));
+        out.insert("stairs".into(), Json::Array(model.stairs.iter().map(|s| {
+            json!({"id": s.name, "riser": num(s.riser), "tread": num(s.tread), "risers": s.risers})
+        }).collect()));
+        out.insert("curtain_walls".into(), Json::Array(model.curtain_walls.iter().map(|c| {
+            json!({"id": c.name, "panels": c.panels, "mullion_length": num(c.mullion_length)})
+        }).collect()));
         Ok(Json::Object(out))
     }
 }
