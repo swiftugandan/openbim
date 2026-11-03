@@ -1,0 +1,11 @@
+[package]
+name = "bim-model"
+description = "Building geometry compiler: document entities to solids (walls, joins, openings, slabs, columns, beams) and glTF export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-geom = { path = "../bim-geom" }
