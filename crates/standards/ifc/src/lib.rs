@@ -14,11 +14,16 @@
 //! * [`schema`] holds attribute tables (names in order, supertypes) for the IFC4 and IFC2X3
 //!   entities the import/export needs; [`Entity`] is a typed view over an instance with
 //!   by-name attribute access, and [`StepFile::add_entity`] builds instances by attribute name.
-//! * [`guid`] converts IFC GlobalIds (22-character base-64) to and from 128-bit values.
+//! * [`guid`] converts IFC GlobalIds (22-character base-64, or UUID text) to and from 128-bit values.
+//! * [`ifcjson`] writes a document as ifcJSON ([`ifcjson::export_ifcjson`]; the IFC4 export in
+//!   ifcJSON spelling, plus every entity's exact content so that reading it back preserves the
+//!   content hash) and reads ifcJSON ([`ifcjson::import_ifcjson`]): such an export rebuilds the
+//!   document, any other ifcJSON is imported like the `.ifc` it stands for.
 
 mod error;
 pub mod export;
 pub mod guid;
+pub mod ifcjson;
 pub mod import;
 mod model;
 mod reader;

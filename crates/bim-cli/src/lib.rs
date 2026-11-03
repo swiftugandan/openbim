@@ -15,13 +15,13 @@
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade <trade> [--method newton\|hardy-cross] [--json]` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document (without `--json`, as one text line per reported element); `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); `mep` the pipe/duct network hydraulics (`bim-mep`), `--method` choosing its network solver; an unknown trade or method exits 2 (see the private `engines` and `geometry` modules) |
-//! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
+//! | `bim export <dir> --format gltf\|ifc\|ifcjson --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up), the IFC4 file (`bim_ifc::export`) or the ifcJSON 0.0.1 document (`bim_ifc::ifcjson`: the IFC4 export as an object list, with the exact document alongside so that importing it gives the document back); other formats exit 2 |
 //! | `bim export <dir> --format svg --view <view> --out <file>` | writes the 2D drawing of `<view>` (`plan:<level>@<h>`, `section:<x0>,<y0>,<x1>,<y1>`, `elevation:<n\|s\|e\|w>`) built by `bim-draw`: layers CUT, PROJECTION, HIDDEN, HATCH, DIMENSION, ANNOTATION as `<g id>`, paper mm at 1:100, `data-entity` on every element; an unknown or unparseable view exits 2 |
 //! | `bim bcf <dir> create --title <t> --entity <id> [<id>…]` | makes a BCF 3.0 topic about those entities, mirrors it as an `Issue` entity (id = the topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to the components) and prints the Guid as its only output line (see the private `bcf` module) |
 //! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
 //! | `bim bcf <dir> import <file.bcfzip>` | mirrors every topic of a BCF 3.0 archive as an `Issue` entity, atomically; a file that is not a BCF 3.0 archive, or a component that is not an entity of the project, exits 2 with nothing applied |
 //! | `bim sketch <dir> <file.json>` | applies the file's direct-modelling commands (spec/sketch.md) through `bim-sketch`, all or none; an invalid command exits 2 |
-//! | `bim import <dir> <file.ifc>` | adds the building elements of an IFC4 or IFC2X3 file as ops (`bim_ifc::import`), all or none; a file that does not parse, of another schema (e.g. IFC4X3) or with a dangling reference under a product exits 2 with nothing applied; skipped elements are reported as `bim: warning:` lines on stderr |
+//! | `bim import <dir> <file.ifc\|file.json>` | adds the building elements of an IFC4 or IFC2X3 file as ops (`bim_ifc::import`), or the entities of an ifcJSON file (`*.json`, `*.ifcjson`; `bim_ifc::ifcjson`: a file written by `bim export --format ifcjson` gives the exported document back, any other ifcJSON is imported like the IFC it stands for), all or none; a file that does not parse, a JSON file that is not ifcJSON, of another schema (e.g. IFC4X3) or with a dangling reference under a product exits 2 with nothing applied; skipped elements are reported as `bim: warning:` lines on stderr |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -77,13 +77,13 @@ pub const USAGE: &str = "usage:
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
   bim solve <dir> --trade <trade> [--method newton|hardy-cross] --json
-  bim export <dir> --format gltf|ifc --out <file>
+  bim export <dir> --format gltf|ifc|ifcjson --out <file>
   bim export <dir> --format svg --view <view> --out <file>
   bim bcf <dir> create --title <t> --entity <id> [<id>…]
   bim bcf <dir> export <file.bcfzip>
   bim bcf <dir> import <file.bcfzip>
   bim sketch <dir> <file.json>
-  bim import <dir> <file.ifc>";
+  bim import <dir> <file.ifc|file.json>";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]

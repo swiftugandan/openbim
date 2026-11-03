@@ -5,6 +5,10 @@
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
 //!   [`bim_model::gltf`]: one mesh node per element with `extras.id`.
 //! * `bim export <dir> --format ifc --out <file>` writes the IFC4 file of [`bim_ifc::export`].
+//! * `bim export <dir> --format ifcjson --out <file>` writes the ifcJSON 0.0.1 document of
+//!   [`bim_ifc::ifcjson`]: the IFC4 export as an object list, with the exact document alongside,
+//!   so `bim import` of it gives the document back (same content hash). A model with values ifcJSON
+//!   cannot represent (a number that is not finite) exits 2.
 //! * `bim export <dir> --format svg --view <view> --out <file>` writes the drawing of
 //!   [`bim_draw`] (plan, section or elevation, spec/cli.md); an unknown or unparseable view is a
 //!   usage error (exit 2), as is `--view` with another format or svg without it.
@@ -63,7 +67,7 @@ impl Parsed<'_> {
     }
 }
 
-/// `bim export <dir> --format gltf|ifc --out <file>` and
+/// `bim export <dir> --format gltf|ifc|ifcjson --out <file>` and
 /// `bim export <dir> --format svg --view <view> --out <file>`.
 pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let form = "export <dir> --format <format> [--view <view>] --out <file>";
@@ -73,8 +77,8 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     }
     let format = p.value("--format").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--format` is required")))?;
     let file = p.value("--out").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--out` is required")))?;
-    if format != "gltf" && format != "ifc" && format != "svg" {
-        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc, svg)", format.to_string_lossy())));
+    if format != "gltf" && format != "ifc" && format != "ifcjson" && format != "svg" {
+        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc, ifcjson, svg)", format.to_string_lossy())));
     }
     let view = p.value("--view");
     if format == "svg" && view.is_none() {
@@ -91,6 +95,9 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
             return Err(CliError::Input(format!("{}: the model has values IFC cannot represent", Path::new(file).display())));
         }
         text
+    } else if format == "ifcjson" {
+        bim_ifc::ifcjson::export_ifcjson_string(&project.doc)
+            .map_err(|e| CliError::Input(format!("{}: {e}", Path::new(file).display())))?
     } else if let Some(view) = view {
         let view = view.to_str().ok_or_else(|| CliError::Usage(format!("view `{}` is not valid UTF-8", view.to_string_lossy())))?;
         let view = bim_draw::View::parse(&project.doc, view).map_err(|e| CliError::Usage(e.to_string()))?;
@@ -167,6 +174,17 @@ mod tests {
         let wall = bim_ifc::export::entity_guid(bim_doc::EntityId::derive("W"));
         assert!(text.contains(&format!("IFCWALL('{wall}'")), "{text}");
         assert!(text.contains("IFCSLAB(") && text.contains("'Pset_WallCommon'"));
+        let ifcjson = tmp.path().join("m.json");
+        let (code, out, err) = run(&["export", d, "--format", "ifcjson", "--out", ifcjson.to_str().unwrap()]);
+        assert_eq!((code, out.as_str()), (0, ""), "{err}");
+        let text = fs::read_to_string(&ifcjson).unwrap();
+        assert!(json::parse(&text).is_ok(), "{text}");
+        assert!(text.starts_with("{\n  \"type\": \"ifcJSON\",\n  \"version\": \"0.0.1\",\n  \"schemaIdentifier\": \"IFC4\""), "{text}");
+        // The wall's object has the GlobalId of the IFC export, in UUID form, and carries the entity.
+        let uuid = bim_ifc::guid::to_uuid(bim_doc::EntityId::derive("W").0);
+        assert!(text.contains(&format!("\"type\": \"IfcWall\",\n      \"globalId\": \"{uuid}\"")), "{text}");
+        assert!(text.contains("\"openbimEntity\"") && text.contains("\"kind\": \"WallType\""));
+        assert!(!text.contains(&bim_ifc::export::entity_guid(bim_doc::EntityId::derive("W"))));
     }
 
     #[test]
@@ -179,10 +197,12 @@ mod tests {
             &["solve", "d", "e", "--trade", "arch"],
             &["solve", "d", "--trade", "arch", "--bogus"],
             &["export", "d", "--format", "gltf"],
+            &["export", "d", "--format", "ifcjson"],
             &["export", "d", "--out", "f"],
             &["export", "d", "--format", "obj", "--out", "f"],
             &["export", "d", "--format", "svg", "--out", "f"],
             &["export", "d", "--format", "gltf", "--view", "elevation:s", "--out", "f"],
+            &["export", "d", "--format", "ifcjson", "--view", "elevation:s", "--out", "f"],
         ] {
             let (code, out, err) = run(args);
             assert_eq!(code, 2, "{args:?}");

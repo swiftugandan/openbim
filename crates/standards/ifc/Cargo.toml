@@ -11,3 +11,8 @@ bim-doc = { path = "../../bim-doc" }
 bim-geom = { path = "../../bim-geom" }
 bim-model = { path = "../../bim-model" }
 bim-sketch = { path = "../../bim-sketch" }
+# ifcJSON (`ifcjson`). `preserve_order` keeps object members in insertion order (deterministic
+# output, `type`/`globalId` first); `float_roundtrip` makes parsing exact for every f64 the writer
+# prints, which the document-hash round trip depends on (serde_json's default fast path can be one
+# ulp off for 17-digit numbers).
+serde_json = { version = "=1.0.140", features = ["preserve_order", "float_roundtrip"] }

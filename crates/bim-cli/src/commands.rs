@@ -133,24 +133,29 @@ pub(crate) fn sketch(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     Ok(0)
 }
 
-/// `bim import <dir> <file.ifc>`: adds the building elements of an IFC4 or IFC2X3 file as ops
-/// (`bim_ifc::import`), all or none. Each imported entity is created with its id's ULID (or the
-/// import's seed for derived entities) as its name; an entity the project already has (an earlier
-/// import of the same objects) is updated with a `set` per prop whose value differs. A file that
-/// does not parse (truncated, malformed), a FILE_SCHEMA other than IFC4 / IFC2X3 (e.g. IFC4X3), a
-/// reference to an undefined instance under a product's placement or representation, an ifcJSON
-/// file (not read yet), or an id the project holds as another kind exit 2 with nothing changed. What the import
-/// skips or approximates is reported on stderr as `bim: warning: …` lines.
+/// `bim import <dir> <file.ifc|file.json>`: adds the building elements of an IFC4 or IFC2X3 file
+/// (`bim_ifc::import`), or the entities of an ifcJSON file (`*.json`, `*.ifcjson`;
+/// `bim_ifc::ifcjson`), as ops, all or none. Each imported entity is created with its id's ULID (or
+/// the import's seed for derived entities) as its name; an entity the project already has (an
+/// earlier import of the same objects) is updated with a `set` per prop whose value differs. A
+/// file that does not parse (truncated, malformed), a JSON file that is not ifcJSON, a FILE_SCHEMA
+/// other than IFC4 / IFC2X3 (e.g. IFC4X3), a reference to an undefined instance under a product's
+/// placement or representation, or an id the project holds as another kind exit 2 with nothing
+/// changed: the file is read completely, and the ops checked against a copy of the document, before
+/// anything is written. What the import skips or approximates is reported on stderr as
+/// `bim: warning: …` lines.
 pub(crate) fn import(args: &[OsString], _out: &mut dyn Write) -> Outcome {
-    let [dir, file] = operands::<2>(args, "import <dir> <file.ifc>")?;
+    let [dir, file] = operands::<2>(args, "import <dir> <file.ifc|file.json>")?;
     let (dir, file) = (Path::new(dir), Path::new(file));
     let shown = file.display();
-    if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
-        return Err(CliError::Input(format!("{shown}: ifcJSON import is not supported yet")));
-    }
     let bytes = fs::read(file).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
-    let step = bim_ifc::StepFile::read(&bytes[..]).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
-    let imported = bim_ifc::import::import_ifc(&step).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let imported = if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json") || e.eq_ignore_ascii_case("ifcjson")) {
+        let text = String::from_utf8(bytes).map_err(|_| CliError::Input(format!("{shown}: not valid UTF-8")))?;
+        bim_ifc::ifcjson::import_ifcjson(&text).map_err(|e| CliError::Input(format!("{shown}: {e}")))?
+    } else {
+        let step = bim_ifc::StepFile::read(&bytes[..]).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+        bim_ifc::import::import_ifc(&step).map_err(|e| CliError::Input(format!("{shown}: {e}")))?
+    };
     let project = Project::open(dir)?;
     let seeds: std::collections::HashMap<bim_doc::EntityId, &str> =
         imported.entities.iter().map(|e| (e.id, e.seed.as_str())).collect();
@@ -626,7 +631,7 @@ mod tests {
         assert_eq!(run(&["export", &src, "--format", "ifc", "--out", &ifc]).0, 0);
         assert_eq!(run(&["init", &dst]).0, 0);
         let journal = || fs::read_to_string(Path::new(&dst).join("doc.oplog")).unwrap();
-        // A truncated file, an ifcJSON file and a missing file change nothing.
+        // A truncated file, a JSON file that is not ifcJSON (an ops file) and a missing file change nothing.
         let text = fs::read_to_string(&ifc).unwrap();
         let cut = p("cut.ifc");
         fs::write(&cut, &text[..text.len() / 2]).unwrap();
@@ -681,5 +686,93 @@ mod tests {
             assert!(err.contains(why), "{err}");
         }
         assert_eq!(fresh_journal(), "");
+    }
+
+    #[test]
+    fn ifcjson_round_trips_the_document_and_invalid_ifcjson_changes_nothing() {
+        let tmp = TempDir::new();
+        let p = |name: &str| tmp.path().join(name).to_str().unwrap().to_string();
+        let ulid = bim_doc::EntityId::new_ulid(1_700_000_000_000, 0x2a2a).to_ulid_string();
+        let ops = p("ops.json");
+        fs::write(
+            &ops,
+            format!(
+                r#"{{"schema":1,"ops":[
+              {{"op":"create","id":"L0","kind":"Level","props":{{"elevation":0}}}},
+              {{"op":"create","id":"L1","kind":"Level","props":{{"elevation":3.1}}}},
+              {{"op":"create","id":"WT","kind":"WallType","props":{{"layer_thickness":[0.1,0.15],"layer_material":["Brick","Mineral wool"],"layer_conductivity":[0.77,0.04]}}}},
+              {{"op":"create","id":"M","kind":"Material","props":{{"name":"C30/37","E":3.3e10,"density":2500}}}},
+              {{"op":"create","id":"W1","kind":"Wall","props":{{"level":{{"ref":"L0"}},"type":{{"ref":"WT"}},"x1":0,"y1":0,"x2":7,"y2":0.1,"height":3}}}},
+              {{"op":"create","id":"{ulid}","kind":"Wall","props":{{"level":{{"ref":"L1"}},"type":{{"ref":"WT"}},"x1":0,"y1":9,"x2":4,"y2":9,"height":2.7,"base_offset":0.05}}}},
+              {{"op":"create","id":"D1","kind":"Opening","props":{{"host":{{"ref":"W1"}},"kind":"door","offset":2,"sill":0,"width":1,"height":2.2}}}},
+              {{"op":"create","id":"S1","kind":"Slab","props":{{"level":{{"ref":"L1"}},"boundary":[0,0,7,0,7,5,0,5],"thickness":0.2}}}},
+              {{"op":"create","id":"C1","kind":"Column","props":{{"x":3.5,"y":2.5,"base":{{"ref":"L0"}},"top":{{"ref":"L1"}},"section_b":0.3,"section_h":0.3,"material":{{"ref":"M"}}}}}},
+              {{"op":"create","id":"SP","kind":"Space","props":{{"level":{{"ref":"L0"}},"x":3.5,"y":2,"name":"Hall"}}}}
+            ]}}"#
+            ),
+        )
+        .unwrap();
+        let (a, b, c) = (p("a"), p("b"), p("c"));
+        assert_eq!(run(&["init", &a]).0, 0);
+        assert_eq!(run(&["apply", &a, &ops]).0, 0);
+        let (first, second) = (p("a.json"), p("b.json"));
+        let (code, err) = run(&["export", &a, "--format", "ifcjson", "--out", &first]);
+        assert_eq!(code, 0, "{err}");
+        let hash = |dir: &str| Project::open(Path::new(dir)).unwrap().doc.content_hash();
+        let journal = |dir: &str| fs::read_to_string(Path::new(dir).join("doc.oplog")).unwrap();
+
+        // Input that is not valid ifcJSON changes nothing: a truncated file, an ops file, a file
+        // that is not UTF-8, an ifcJSON file whose members are malformed, one that is missing.
+        assert_eq!(run(&["init", &b]).0, 0);
+        let text = fs::read_to_string(&first).unwrap();
+        let (cut, bytes, member) = (p("cut.json"), p("bytes.json"), p("member.json"));
+        fs::write(&cut, &text[..text.len() / 2]).unwrap();
+        fs::write(&bytes, [b'{', 0xff, 0xfe]).unwrap();
+        fs::write(&member, text.replacen("\"kind\": \"Level\"", "\"kind\": 7", 1)).unwrap();
+        for (f, why) in [
+            (cut.as_str(), "not valid JSON"),
+            (ops.as_str(), "not an ifcJSON file"),
+            (bytes.as_str(), "not valid UTF-8"),
+            (member.as_str(), "needs a \"kind\""),
+            (p("missing.json").as_str(), "missing.json"),
+        ] {
+            let (code, err) = run(&["import", &b, f]);
+            assert_eq!(code, 2, "{f}: {err}");
+            assert!(err.contains(why) && err.contains(f), "{f}: {err}");
+        }
+        assert_eq!(journal(&b), "");
+
+        // doc -> ifcJSON -> doc keeps the content hash, and so does a second trip.
+        let (code, err) = run(&["import", &b, &first]);
+        assert_eq!(code, 0, "{err}");
+        assert_eq!(hash(&b), hash(&a));
+        let after = journal(&b);
+        assert!(after.contains(&format!("create {ulid} Wall")) && after.contains("create W1 Wall"), "{after}");
+        assert_eq!(run(&["export", &b, "--format", "ifcjson", "--out", &second]).0, 0);
+        assert_eq!(fs::read(&first).unwrap(), fs::read(&second).unwrap());
+        assert_eq!(run(&["init", &c]).0, 0);
+        assert_eq!(run(&["import", &c, &second]).0, 0);
+        assert_eq!(hash(&c), hash(&a));
+        // Importing the same file again adds nothing; `.IFCJSON` is read like `.json`.
+        assert_eq!(run(&["import", &b, &first]).0, 0);
+        assert_eq!(journal(&b), after);
+        let upper = p("copy.IFCJSON");
+        fs::copy(&first, &upper).unwrap();
+        let fresh = p("fresh");
+        assert_eq!(run(&["init", &fresh]).0, 0);
+        assert_eq!(run(&["import", &fresh, &upper]).0, 0);
+        assert_eq!(hash(&fresh), hash(&a));
+
+        // An id the project holds as another kind is refused, nothing changes.
+        let other = p("other");
+        assert_eq!(run(&["init", &other]).0, 0);
+        let clash = p("clash.json");
+        fs::write(&clash, r#"{"schema":1,"ops":[{"op":"create","id":"W1","kind":"Level","props":{}}]}"#).unwrap();
+        assert_eq!(run(&["apply", &other, &clash]).0, 0);
+        let before = journal(&other);
+        let (code, err) = run(&["import", &other, &first]);
+        assert_eq!(code, 2);
+        assert!(err.contains("holds it as a Level"), "{err}");
+        assert_eq!(journal(&other), before);
     }
 }

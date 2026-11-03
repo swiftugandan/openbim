@@ -145,6 +145,7 @@ dependencies = [
  "bim-geom",
  "bim-model",
  "bim-sketch",
+ "serde_json",
 ]
 
 [[package]]
