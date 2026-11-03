@@ -212,7 +212,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M3 Incremental engine, storage, sync
 
-- [ ] T3.1: demand-driven incremental computation (salsa-style)
+- [x] T3.1: demand-driven incremental computation (salsa-style)
   - Files: Cargo.toml, Cargo.lock, crates/bim-incr/, crates/bim-model/, crates/bim-draw/
   - Opens: T2.8
   - Builder: fable

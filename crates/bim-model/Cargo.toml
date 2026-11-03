@@ -10,3 +10,4 @@ publish.workspace = true
 bim-doc = { path = "../bim-doc" }
 bim-geom = { path = "../bim-geom" }
 bim-sketch = { path = "../bim-sketch" }
+bim-incr = { path = "../bim-incr" }
