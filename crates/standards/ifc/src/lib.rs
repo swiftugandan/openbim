@@ -19,6 +19,7 @@
 mod error;
 pub mod export;
 pub mod guid;
+pub mod import;
 mod model;
 mod reader;
 pub mod schema;

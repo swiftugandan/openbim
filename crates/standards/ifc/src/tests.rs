@@ -312,6 +312,40 @@ fn typed_access_and_builder() {
 }
 
 #[test]
+fn ifc4_standard_and_elemented_cases_are_subtypes_of_their_class() {
+    for (sub, parent) in [
+        ("IfcColumnStandardCase", "IfcColumn"),
+        ("IfcBeamStandardCase", "IfcBeam"),
+        ("IfcDoorStandardCase", "IfcDoor"),
+        ("IfcWindowStandardCase", "IfcWindow"),
+        ("IfcMemberStandardCase", "IfcMember"),
+        ("IfcPlateStandardCase", "IfcPlate"),
+        ("IfcWallElementedCase", "IfcWall"),
+        ("IfcSlabElementedCase", "IfcSlab"),
+        ("IfcSlabStandardCase", "IfcSlab"),
+        ("IfcWallStandardCase", "IfcWall"),
+        ("IfcOpeningStandardCase", "IfcOpeningElement"),
+    ] {
+        let def = Schema::Ifc4.entity(sub).unwrap_or_else(|| panic!("{sub} missing"));
+        assert_eq!(def.attributes, Schema::Ifc4.entity(parent).unwrap().attributes, "{sub}");
+        assert!(Schema::Ifc4.is_subtype_of(&sub.to_ascii_uppercase(), parent), "{sub}");
+        assert!(Schema::Ifc4.is_subtype_of(sub, "IfcElement"), "{sub}");
+    }
+    // A `…StandardCase` / `…ElementedCase` name outside the tables is its base class's subtype.
+    assert!(Schema::Ifc4.is_subtype_of("IFCRAILINGSTANDARDCASE", "IfcRailing"));
+    assert!(Schema::Ifc2x3.is_subtype_of("IfcColumnStandardCase", "IfcBuildingElement"));
+    assert!(!Schema::Ifc4.is_subtype_of("STANDARDCASE", "IfcRoot"));
+    assert!(!Schema::Ifc4.is_subtype_of("IfcNothingStandardCase", "IfcRoot"));
+    // An IFC4 file's IfcDoorStandardCase is an IfcDoor through the typed API.
+    let f = StepFile::parse_str(
+        "ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('','',(''),(''),'','','');\nFILE_SCHEMA(('IFC4'));\nENDSEC;\nDATA;\n#1=IFCDOORSTANDARDCASE('0aaaaaaaaaaaaaaaaaaaaa',$,'D',$,$,$,$,$,2.1,0.9,$,$,$);\nENDSEC;\nEND-ISO-10303-21;\n",
+    )
+    .unwrap();
+    let d = f.entities_of("IfcDoor").next().unwrap();
+    assert_eq!((d.type_name(), d.get_f64("OverallWidth")), ("IfcDoorStandardCase", Some(0.9)));
+}
+
+#[test]
 fn insert_rejects_duplicate_ids() {
     let mut f = StepFile::new(vec![]);
     f.insert(crate::Instance::new(10, "x", vec![])).unwrap();

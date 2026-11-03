@@ -142,7 +142,9 @@ name = "bim-ifc"
 version = "0.1.0"
 dependencies = [
  "bim-doc",
+ "bim-geom",
  "bim-model",
+ "bim-sketch",
 ]
 
 [[package]]
