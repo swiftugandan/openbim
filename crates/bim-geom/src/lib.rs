@@ -13,17 +13,22 @@
 
 //! * [`boolean`] — union, difference and intersection of closed solids with exact-predicate
 //!   classification; results are closed 2-manifolds with merged coplanar faces, or empty.
+//! * [`section()`] / [`section_area`] — planar sections of solids as [`Polygon3`] regions with
+//!   holes; coplanar faces are included, edge or vertex contact gives nothing.
 
 pub(crate) mod big;
 pub mod boolean;
 pub(crate) mod exact;
 pub mod polygon;
 pub mod predicates;
+pub(crate) mod region2d;
+pub mod section;
 pub mod solid;
 pub mod types;
 
 pub use boolean::{boolean, BoolOp, GeomError};
 pub use polygon::Polygon;
 pub use predicates::{incircle, orient2d, orient3d};
+pub use section::{section, section_area, Plane3, Polygon3};
 pub use solid::{Face, HalfEdge, Solid, Vertex};
 pub use types::{Point2, Point3, Vec3};

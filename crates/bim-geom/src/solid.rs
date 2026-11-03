@@ -11,6 +11,7 @@ use std::io::{self, BufWriter, Write};
 use std::path::Path;
 
 use crate::polygon::{signed_area, Polygon};
+use crate::region2d::resolve_crossings;
 use crate::types::{Point2, Point3, Vec3};
 
 /// A vertex of the mesh.
@@ -188,8 +189,17 @@ impl Solid {
     /// planar quadrilateral per polygon edge, all with outward normals. A polygon with holes
     /// yields caps with inner loops (a solid of genus = number of holes). Ring orientation is
     /// normalised, so a clockwise outer ring or counter-clockwise holes are accepted. Fewer than
-    /// three outer vertices give the empty solid.
+    /// three outer vertices give the empty solid. Rings whose edges cross (a self-intersecting
+    /// outer ring, a hole crossing the outer ring) are first resolved into the simple polygons
+    /// they bound under the positive fill rule, and each of those is extruded.
     pub fn extrude(polygon: &Polygon, z0: f64, height: f64) -> Solid {
+        if let Some(parts) = resolve_crossings(polygon) {
+            return Solid::disjoint_union(parts.iter().map(|p| Solid::extrude_simple(p, z0, height)));
+        }
+        Solid::extrude_simple(polygon, z0, height)
+    }
+
+    fn extrude_simple(polygon: &Polygon, z0: f64, height: f64) -> Solid {
         let (rings, pts) = match normalised_rings(polygon) {
             Some(r) => r,
             None => return Solid::new(),
@@ -217,8 +227,37 @@ impl Solid {
     /// result is then a self-overlapping surface (closed, but its legs cancel in the signed
     /// volume). Likewise a path turning so sharply that the mitred sections intersect each other
     /// yields a self-intersecting surface: the mesh is still a closed manifold but the volume is
-    /// only meaningful for turns the profile can follow.
+    /// only meaningful for turns the profile can follow. A profile whose rings cross is resolved
+    /// as in [`Solid::extrude`] and each resulting polygon is swept.
     pub fn sweep(polygon: &Polygon, path: &[Point3]) -> Solid {
+        if let Some(parts) = resolve_crossings(polygon) {
+            return Solid::disjoint_union(parts.iter().map(|p| Solid::sweep_simple(p, path)));
+        }
+        Solid::sweep_simple(polygon, path)
+    }
+
+    /// The solids side by side in one mesh (no merging: shared coordinates stay distinct vertices).
+    fn disjoint_union(parts: impl Iterator<Item = Solid>) -> Solid {
+        let mut out = Solid::new();
+        for s in parts {
+            let (nv, nh, nf) = (out.vertices.len(), out.half_edges.len(), out.faces.len());
+            out.vertices.extend(s.vertices.into_iter().map(|v| Vertex { point: v.point, half_edge: v.half_edge.map(|h| h + nh) }));
+            out.half_edges.extend(s.half_edges.into_iter().map(|h| HalfEdge {
+                origin: h.origin + nv,
+                twin: h.twin.map(|t| t + nh),
+                next: h.next + nh,
+                prev: h.prev + nh,
+                face: h.face + nf,
+            }));
+            out.faces.extend(s.faces.into_iter().map(|f| Face {
+                loops: f.loops.into_iter().map(|l| l + nh).collect(),
+                triangles: f.triangles.into_iter().map(|t| [t[0] + nv, t[1] + nv, t[2] + nv]).collect(),
+            }));
+        }
+        out
+    }
+
+    fn sweep_simple(polygon: &Polygon, path: &[Point3]) -> Solid {
         let (rings, pts) = match normalised_rings(polygon) {
             Some(r) => r,
             None => return Solid::new(),
