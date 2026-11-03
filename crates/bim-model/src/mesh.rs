@@ -1,13 +1,15 @@
-//! Indexed triangle meshes and the one solid construction every element uses: a vertical prism
-//! over a convex plan polygon minus axis-aligned "slot" boxes.
+//! Indexed triangle meshes and the two solid constructions every element uses: a vertical prism
+//! over a convex plan polygon minus axis-aligned "slot" boxes ([`cut_prism`]), and the union of
+//! axis-aligned boxes ([`box_union`]).
 //!
-//! [`cut_prism`] works on a cell complex instead of a general boolean (which is what keeps it
-//! robust, see `bim_geom` issue #24): the plan polygon is cut into convex pieces by the lines
+//! Both work on a cell complex instead of a general boolean (which is what keeps them robust, see
+//! `bim_geom` issue #24). [`cut_prism`]: the plan polygon is cut into convex pieces by the lines
 //! `s = c` at every box edge, the height into intervals at every box bottom and top, and each
 //! (piece, interval) cell is either solid or removed. Volume is the exact sum over solid cells;
 //! the mesh is the boundary between solid and removed cells. Pieces share the exact same cut
 //! points (each is computed once) and every column uses every height level, so the mesh is
-//! edge-to-edge: closed and consistently oriented by construction.
+//! edge-to-edge: closed and consistently oriented by construction. [`box_union`] does the same on
+//! the grid of all box faces.
 
 use bim_geom::{Point3, Solid};
 
@@ -313,6 +315,183 @@ pub fn cut_prism(poly: &[[f64; 2]], z0: f64, h: f64, slots: &[Slot], with_mesh: 
     (volume, mesh)
 }
 
+/// An axis-aligned box: the product of the intervals `lo[a]..hi[a]` over the three axes.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Aabb {
+    pub lo: [f64; 3],
+    pub hi: [f64; 3],
+}
+
+/// Most cells [`box_union`] lays out; a union of boxes that needs more gets no mesh.
+const MAX_CELLS: usize = 1 << 24;
+
+/// The union of `boxes` as one closed, outward-oriented 2-manifold mesh, built on a cell complex
+/// without booleans (issue #24). Returns the exact volume of the union and its boundary mesh, in
+/// the boxes' own coordinates.
+///
+/// The grid lines are all box faces, per axis, with faces closer than 1e-7 merged into the
+/// smallest of them (so boxes that touch, overlap or nearly coincide share exact coordinates); a
+/// cell is occupied when some box covers it; the volume is the sum over occupied cells and the
+/// mesh the boundary between occupied and empty cells (one quad of two triangles per cell face,
+/// no coplanar merging, which would leave T-junctions). Vertices are shared through their grid
+/// index, so the mesh is edge-to-edge: closed and consistently oriented by construction.
+///
+/// A box with a non-finite bound or an extent of at most 1e-7 along any axis is ignored. The
+/// result is empty (volume 0) when no box is left, when the grid would exceed 2²⁴ cells, or when
+/// the union is not a manifold solid: two of its parts meet only along an edge or at a vertex (two
+/// boxes touching along an edge, or faces merged into such a contact by the 1e-7 snapping).
+pub fn box_union(boxes: &[Aabb]) -> (f64, Mesh) {
+    match union_cells(boxes) {
+        Some((volume, mesh, false)) => (volume, mesh),
+        _ => (0.0, Mesh::default()),
+    }
+}
+
+/// [`box_union`] before it rejects a pinched surface: `None` when there is nothing to mesh or the
+/// grid is too large, else the volume, the mesh and whether the surface pinches (is not a
+/// 2-manifold at some vertex or edge).
+fn union_cells(boxes: &[Aabb]) -> Option<(f64, Mesh, bool)> {
+    use std::collections::HashMap;
+    use std::sync::OnceLock;
+
+    let boxes: Vec<&Aabb> = boxes
+        .iter()
+        .filter(|b| (0..3).all(|a| b.lo[a].is_finite() && b.hi[a].is_finite() && b.hi[a] - b.lo[a] > SNAP))
+        .collect();
+    if boxes.is_empty() {
+        return None;
+    }
+    let coords: [Vec<f64>; 3] =
+        std::array::from_fn(|a| merge_levels(boxes.iter().flat_map(|b| [b.lo[a], b.hi[a]]).collect()));
+    // Cells per axis (every kept box has at least two distinct coordinates on each axis).
+    let n: [usize; 3] = std::array::from_fn(|a| coords[a].len() - 1);
+    let cells = n[0].checked_mul(n[1]).and_then(|c| c.checked_mul(n[2])).filter(|&c| c <= MAX_CELLS)?;
+    let at = |i: usize, j: usize, k: usize| (i * n[1] + j) * n[2] + k;
+    // The grid coordinate a bound falls on: the last kept coordinate that is ≤ it. This relies on
+    // `merge_levels` keeping the first (smallest) value of each run of close values, so that is
+    // the run the bound belongs to; do not change it to keep a mean or the last value.
+    let index = |a: usize, v: f64| coords[a].partition_point(|&c| c <= v) - 1;
+
+    let mut occupied = vec![false; cells];
+    for b in &boxes {
+        let range: [(usize, usize); 3] = std::array::from_fn(|a| (index(a, b.lo[a]), index(a, b.hi[a])));
+        for i in range[0].0..range[0].1 {
+            for j in range[1].0..range[1].1 {
+                occupied[at(i, j, range[2].0)..at(i, j, range[2].1)].fill(true);
+            }
+        }
+    }
+
+    let mut volume = 0.0;
+    for i in 0..n[0] {
+        for j in 0..n[1] {
+            let area = (coords[0][i + 1] - coords[0][i]) * (coords[1][j + 1] - coords[1][j]);
+            for k in 0..n[2] {
+                if occupied[at(i, j, k)] {
+                    volume += area * (coords[2][k + 1] - coords[2][k]);
+                }
+            }
+        }
+    }
+
+    // The eight cells around a grid vertex, as bits `dx | dy << 1 | dz << 2` (`d` = 0 for the cell
+    // before the vertex along an axis, 1 for the one after); cells outside the grid are empty.
+    let around = |g: [usize; 3]| -> u8 {
+        let side: [[Option<usize>; 2]; 3] =
+            std::array::from_fn(|a| [g[a].checked_sub(1), (g[a] < n[a]).then_some(g[a])]);
+        let mut mask = 0;
+        for c in 0..8usize {
+            if let (Some(i), Some(j), Some(k)) = (side[0][c & 1], side[1][c >> 1 & 1], side[2][c >> 2 & 1]) {
+                mask |= (occupied[at(i, j, k)] as u8) << c;
+            }
+        }
+        mask
+    };
+    static MANIFOLD_VERTEX: OnceLock<[bool; 256]> = OnceLock::new();
+    let manifold_vertex = MANIFOLD_VERTEX.get_or_init(|| std::array::from_fn(|mask| is_manifold_vertex(mask as u8)));
+
+    // Faces: on each plane `p` of axis `a`, every cell of the plane whose two neighbours (outside
+    // the grid counts as empty) differ. With (b, c) the next two axes cyclically, the grid corners
+    // (0,0) (1,0) (1,1) (0,1) in (b, c) run counter-clockwise seen from +a, so that order is the
+    // face of the occupied cell below the plane and the reverse the face of the one above it.
+    let mut mesh = Mesh::default();
+    let mut pinched = false;
+    let mut vertex_ids: HashMap<[u32; 3], u32> = HashMap::new();
+    for a in 0..3 {
+        let (b, c) = ((a + 1) % 3, (a + 2) % 3);
+        for p in 0..=n[a] {
+            for jb in 0..n[b] {
+                for jc in 0..n[c] {
+                    let cell = |pa: usize| {
+                        let mut g = [0; 3];
+                        (g[a], g[b], g[c]) = (pa, jb, jc);
+                        occupied[at(g[0], g[1], g[2])]
+                    };
+                    let (below, above) = (p > 0 && cell(p - 1), p < n[a] && cell(p));
+                    if below == above {
+                        continue;
+                    }
+                    let mut quad = [0u32; 4];
+                    for (slot, (db, dc)) in quad.iter_mut().zip([(0, 0), (1, 0), (1, 1), (0, 1)]) {
+                        // The vertex key is the grid index per axis (x, y, z), whatever `a` is.
+                        let mut g = [0usize; 3];
+                        (g[a], g[b], g[c]) = (p, jb + db, jc + dc);
+                        *slot = *vertex_ids.entry(g.map(|i| i as u32)).or_insert_with(|| {
+                            pinched |= !manifold_vertex[around(g) as usize];
+                            mesh.positions.push(Point3::new(coords[0][g[0]], coords[1][g[1]], coords[2][g[2]]));
+                            (mesh.positions.len() - 1) as u32
+                        });
+                    }
+                    if !below {
+                        quad.reverse();
+                    }
+                    mesh.triangles.push([quad[0], quad[1], quad[2]]);
+                    mesh.triangles.push([quad[0], quad[2], quad[3]]);
+                }
+            }
+        }
+    }
+    Some((volume, mesh, pinched))
+}
+
+/// Whether the boundary of the occupied cells is a 2-manifold at a grid vertex whose eight
+/// surrounding cells are occupied as `mask` says (bit `dx | dy << 1 | dz << 2`). On a small sphere
+/// around the vertex the eight cells are triangles, and the surface is the curve between occupied
+/// and empty ones: it is one simple closed curve (or absent) exactly when no edge at the vertex
+/// has two diagonal occupied cells and two empty ones around it (the curve would cross itself) and
+/// the occupied cells form one group joined through shared faces, as do the empty ones.
+fn is_manifold_vertex(mask: u8) -> bool {
+    for axis in 0..3 {
+        let (b, c) = ((axis + 1) % 3, (axis + 2) % 3);
+        for side in 0..2 {
+            // The four cells around the edge leaving the vertex along (or against) `axis`.
+            let cell = |db: usize, dc: usize| mask >> (side << axis | db << b | dc << c) & 1 == 1;
+            let (q00, q10, q01, q11) = (cell(0, 0), cell(1, 0), cell(0, 1), cell(1, 1));
+            if (q00 && q11 && !q10 && !q01) || (q10 && q01 && !q00 && !q11) {
+                return false;
+            }
+        }
+    }
+    // Cells reachable from the first of `set` through cells that differ in one bit (share a face).
+    let one_group = |set: u8| {
+        let mut seen = set & set.wrapping_neg();
+        loop {
+            let mut next = seen;
+            for c in 0..8 {
+                if seen >> c & 1 == 1 {
+                    next |= 1 << (c ^ 1) | 1 << (c ^ 2) | 1 << (c ^ 4);
+                }
+            }
+            next &= set;
+            if next == seen {
+                return seen == set;
+            }
+            seen = next;
+        }
+    };
+    one_group(mask) && one_group(!mask)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,5 +530,210 @@ mod tests {
             &[Slot { s0: 1.0, s1: 2.0, z0: 0.0, z1: 2.0 }, Slot { s0: 1.5, s1: 2.5, z0: 1.0, z1: 3.0 }], false);
         let removed = 2.0 + 2.0 - 0.5;
         assert!((v - (12.0 - removed)).abs() < 1e-12, "{v}");
+    }
+
+    fn aabb(x: [f64; 2], y: [f64; 2], z: [f64; 2]) -> Aabb {
+        Aabb { lo: [x[0], y[0], z[0]], hi: [x[1], y[1], z[1]] }
+    }
+
+    /// Closed, outward (positive signed volume equal to the reported one), a 2-manifold.
+    fn assert_solid(volume: f64, mesh: &Mesh) {
+        assert!(mesh.is_closed());
+        assert!(mesh.to_solid().is_closed_manifold());
+        assert!((mesh.volume() - volume).abs() <= 1e-12 * volume.max(1.0), "{} vs {volume}", mesh.volume());
+        assert!(volume > 0.0);
+    }
+
+    #[test]
+    fn box_union_of_one_box_is_that_box() {
+        let (v, m) = box_union(&[aabb([-1.0, 1.0], [0.0, 3.0], [2.0, 6.0])]);
+        assert!((v - 24.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        assert_eq!((m.positions.len(), m.triangles.len()), (8, 12));
+        let (lo, hi) = m.bounds().unwrap();
+        assert_eq!((lo, hi), (Point3::new(-1.0, 0.0, 2.0), Point3::new(1.0, 3.0, 6.0)));
+    }
+
+    #[test]
+    fn box_union_merges_overlapping_touching_and_nearly_touching_boxes() {
+        let unit = [0.0, 1.0];
+        // Overlapping: volume of the union, not the sum.
+        let (v, m) = box_union(&[aabb([0.0, 2.0], unit, unit), aabb([1.0, 3.0], unit, unit)]);
+        assert!((v - 3.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        // Touching along a face: one solid with no interior face (10 quads, not 12).
+        let (v, m) = box_union(&[aabb(unit, unit, unit), aabb([1.0, 2.0], unit, unit)]);
+        assert!((v - 2.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        assert_eq!(m.triangles.len(), 20);
+        // Faces closer than SNAP are one plane, at the smallest coordinate.
+        let (v, m) = box_union(&[aabb(unit, unit, unit), aabb([1.0 + 5e-8, 2.0], unit, unit)]);
+        assert!((v - 2.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        assert!(m.positions.iter().all(|p| [0.0, 1.0, 2.0].contains(&p.x)));
+        // One box inside another adds nothing (its grid lines still subdivide the outer faces).
+        let (v, m) = box_union(&[aabb([0.0, 4.0], [0.0, 4.0], [0.0, 4.0]), aabb([1.0, 2.0], [1.0, 2.0], [1.0, 2.0])]);
+        assert!((v - 64.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        assert_eq!(m.bounds(), Some((Point3::new(0.0, 0.0, 0.0), Point3::new(4.0, 4.0, 4.0))));
+    }
+
+    #[test]
+    fn box_union_of_a_cross_a_frame_and_a_staircase_is_a_manifold() {
+        let u = [0.0, 1.0];
+        // A plus sign: 3 + 3 - 1.
+        let (v, m) = box_union(&[aabb([-1.0, 2.0], u, u), aabb(u, [-1.0, 2.0], u)]);
+        assert!((v - 5.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        // A square ring around a hole (genus 1): 9 - 1.
+        let (v, m) = box_union(&[
+            aabb([0.0, 3.0], [0.0, 1.0], u),
+            aabb([0.0, 3.0], [2.0, 3.0], u),
+            aabb([0.0, 1.0], [0.0, 3.0], u),
+            aabb([2.0, 3.0], [0.0, 3.0], u),
+        ]);
+        assert!((v - 8.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        // Blocks of growing height: n(n + 1)/2 cells of a staircase.
+        let blocks: Vec<Aabb> = (1..=6).map(|k| aabb([(k - 1) as f64, k as f64], u, [0.0, k as f64])).collect();
+        let (v, m) = box_union(&blocks);
+        assert!((v - 21.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        // Every triangle faces away from the solid: moving a little along its normal leaves it.
+        for t in &m.triangles {
+            let [a, b, c] = t.map(|i| m.positions[i as usize]);
+            let nrm = [
+                (b.y - a.y) * (c.z - a.z) - (b.z - a.z) * (c.y - a.y),
+                (b.z - a.z) * (c.x - a.x) - (b.x - a.x) * (c.z - a.z),
+                (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x),
+            ];
+            let len = nrm.iter().map(|x| x * x).sum::<f64>().sqrt();
+            let q = [
+                (a.x + b.x + c.x) / 3.0 + 1e-3 * nrm[0] / len,
+                (a.y + b.y + c.y) / 3.0 + 1e-3 * nrm[1] / len,
+                (a.z + b.z + c.z) / 3.0 + 1e-3 * nrm[2] / len,
+            ];
+            let inside = blocks.iter().any(|b| (0..3).all(|k| b.lo[k] < q[k] && q[k] < b.hi[k]));
+            assert!(!inside, "triangle {t:?} faces into the solid");
+        }
+    }
+
+    #[test]
+    fn box_union_gives_nothing_for_a_surface_that_pinches() {
+        let u = [0.0, 1.0];
+        let empty = (0.0, Mesh::default());
+        // Two boxes sharing only an edge, or only a corner.
+        assert_eq!(box_union(&[aabb(u, u, u), aabb([1.0, 2.0], [1.0, 2.0], u)]), empty);
+        assert_eq!(box_union(&[aabb(u, u, u), aabb([1.0, 2.0], [1.0, 2.0], [1.0, 2.0])]), empty);
+        // Faces within 1e-7 are merged first: this is an edge contact too.
+        assert_eq!(box_union(&[aabb(u, u, u), aabb([1.0 + 5e-8, 2.0], [1.0 + 5e-8, 2.0], u)]), empty);
+        // The pieces themselves are fine: the cells are all there, and the contact is the only fault.
+        let (volume, mesh, pinched) = union_cells(&[aabb(u, u, u), aabb([1.0, 2.0], [1.0, 2.0], u)]).unwrap();
+        assert!((volume - 2.0).abs() < 1e-12 && (mesh.volume() - 2.0).abs() < 1e-12);
+        assert!(pinched && !mesh.is_closed(), "the shared edge is used four times");
+        // Touching along a face, even with the contact shifted, is not a pinch.
+        let (v, m) = box_union(&[aabb([0.0, 2.0], u, u), aabb([2.0, 3.0], [0.5, 1.5], [0.5, 1.5])]);
+        assert!((v - 3.0).abs() < 1e-12);
+        assert_solid(v, &m);
+        // Two separate boxes are two solids in one mesh.
+        let (v, m) = box_union(&[aabb(u, u, u), aabb([3.0, 4.0], u, u)]);
+        assert!((v - 2.0).abs() < 1e-12);
+        assert_solid(v, &m);
+    }
+
+    /// `union_cells` over `cells` (unit cells of a lattice): the pinch verdict, which must be exactly
+    /// "the mesh is not a closed 2-manifold", and the volume the number of cells.
+    fn pinch_verdict(cells: &[[usize; 3]]) -> bool {
+        let boxes: Vec<Aabb> = cells
+            .iter()
+            .map(|&c| {
+                let lo = c.map(|i| i as f64);
+                Aabb { lo, hi: lo.map(|x| x + 1.0) }
+            })
+            .collect();
+        let (volume, mesh, pinched) = union_cells(&boxes).unwrap();
+        assert!((volume - cells.len() as f64).abs() < 1e-12, "{cells:?}");
+        assert!((mesh.volume() - volume).abs() < 1e-9, "{cells:?}");
+        let manifold = mesh.is_closed() && mesh.to_solid().is_closed_manifold();
+        assert_eq!(pinched, !manifold, "{cells:?}");
+        assert_eq!(box_union(&boxes) == (volume, mesh), !pinched, "{cells:?}");
+        pinched
+    }
+
+    #[test]
+    fn the_pinch_test_is_exact_for_every_arrangement_of_a_2x2x2_block() {
+        let mut pinched = 0;
+        for mask in 1u32..256 {
+            let cells: Vec<[usize; 3]> =
+                (0..8).filter(|c| mask >> c & 1 == 1).map(|c| [c & 1, c >> 1 & 1, c >> 2 & 1]).collect();
+            pinched += pinch_verdict(&cells) as u32;
+        }
+        // Not everything is fine (diagonals, rings) and not everything is a pinch.
+        assert!(pinched > 50 && pinched < 200, "{pinched}");
+    }
+
+    #[test]
+    fn the_pinch_test_is_exact_for_random_voxel_sets() {
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move |below: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state % below
+        };
+        let (mut pinched, mut fine) = (0, 0);
+        for _ in 0..1500 {
+            // A few random boxes of a 4 × 4 × 4 lattice, and sometimes loose cells besides.
+            let mut cells = std::collections::BTreeSet::new();
+            for _ in 0..1 + next(4) {
+                let mut r = [[0usize; 2]; 3];
+                for axis in &mut r {
+                    let (a, b) = (next(4) as usize, next(4) as usize);
+                    *axis = [a, a + 1 + b.min(3 - a)];
+                }
+                for i in r[0][0]..r[0][1] {
+                    for j in r[1][0]..r[1][1] {
+                        for k in r[2][0]..r[2][1] {
+                            cells.insert([i, j, k]);
+                        }
+                    }
+                }
+            }
+            for _ in 0..if next(10) < 4 { 1 + next(3) } else { 0 } {
+                cells.insert([next(4) as usize, next(4) as usize, next(4) as usize]);
+            }
+            if pinch_verdict(&cells.into_iter().collect::<Vec<_>>()) {
+                pinched += 1;
+            } else {
+                fine += 1;
+            }
+        }
+        assert!(pinched > 100 && fine > 100, "{pinched} pinched, {fine} fine");
+    }
+
+    #[test]
+    fn box_union_ignores_unusable_boxes_and_oversized_grids() {
+        let u = [0.0, 1.0];
+        let good = aabb(u, u, u);
+        let bad = [
+            aabb([0.0, 0.0], u, u),
+            aabb([1.0, 0.0], u, u),
+            aabb(u, u, [0.0, 1e-7]),
+            aabb([0.0, f64::NAN], u, u),
+            aabb(u, [0.0, f64::INFINITY], u),
+        ];
+        assert_eq!(box_union(&bad), (0.0, Mesh::default()));
+        assert_eq!(box_union(&[]), (0.0, Mesh::default()));
+        let mut all = bad.to_vec();
+        all.push(good);
+        assert_eq!(box_union(&all), box_union(&[good]));
+        // 511³ cells need more than the grid limit: no mesh, and no time or memory spent on one.
+        let diagonal: Vec<Aabb> = (0..256)
+            .map(|i| {
+                let r = [2.0 * i as f64, 2.0 * i as f64 + 1.0];
+                aabb(r, r, r)
+            })
+            .collect();
+        assert_eq!(box_union(&diagonal), (0.0, Mesh::default()));
     }
 }

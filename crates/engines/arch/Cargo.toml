@@ -1,6 +1,6 @@
 [package]
 name = "bim-arch"
-description = "Architectural engine: rooms from wall topology, areas, volumes, material take-off"
+description = "Architectural engine: rooms from wall topology, areas, volumes, material take-off, stair and curtain-wall quantities"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
