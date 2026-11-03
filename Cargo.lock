@@ -100,6 +100,7 @@ dependencies = [
  "bim-bcf",
  "bim-doc",
  "bim-ifc",
+ "bim-mep",
  "bim-model",
  "bim-plugin",
  "bim-schema",
@@ -132,6 +133,15 @@ version = "0.1.0"
 dependencies = [
  "bim-doc",
  "bim-model",
+]
+
+[[package]]
+name = "bim-mep"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-plugin",
+ "serde_json",
 ]
 
 [[package]]

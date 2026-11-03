@@ -14,7 +14,7 @@
 //! | `bim plugin list <dir> --json` | prints the trade packages in `<dir>/plugins` and the core kinds (spec/cli.md) |
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
-//! | `bim solve <dir> --trade <trade> [--json]` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document (without `--json`, as one text line per reported element); `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); an unknown trade exits 2 (see the private `engines` and `geometry` modules) |
+//! | `bim solve <dir> --trade <trade> [--method newton\|hardy-cross] [--json]` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document (without `--json`, as one text line per reported element); `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); `mep` the pipe/duct network hydraulics (`bim-mep`), `--method` choosing its network solver; an unknown trade or method exits 2 (see the private `engines` and `geometry` modules) |
 //! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
 //! | `bim bcf <dir> create --title <t> --entity <id> [<id>…]` | makes a BCF 3.0 topic about those entities, mirrors it as an `Issue` entity (id = the topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to the components) and prints the Guid as its only output line (see the private `bcf` module) |
 //! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
@@ -74,7 +74,7 @@ pub const USAGE: &str = "usage:
   bim plugin list <dir> --json
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
-  bim solve <dir> --trade <trade> --json
+  bim solve <dir> --trade <trade> [--method newton|hardy-cross] --json
   bim export <dir> --format gltf|ifc --out <file>
   bim bcf <dir> create --title <t> --entity <id> [<id>…]
   bim bcf <dir> export <file.bcfzip>
