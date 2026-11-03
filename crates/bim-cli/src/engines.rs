@@ -1,6 +1,6 @@
 //! The trades and standards of `bim`, resolved only through a [`bim_plugin::Registry`]:
 //!
-//! * [`registry`] registers the shipped engines (today the `arch` trade, [`ArchEngine`]);
+//! * [`registry`] registers the shipped engines (today the `arch` trade, [`bim_arch::ArchEngine`]);
 //!   `bim-plugin` itself has no built-ins.
 //! * `bim solve <dir> --trade <trade> [--json]` looks the trade up with [`Registry::engine`] and
 //!   prints its result: with `--json` as one JSON document, without it as text, one line per
@@ -24,10 +24,11 @@ use std::ffi::OsString;
 use std::io::Write;
 use std::path::Path;
 
-use bim_plugin::{EngineContext, EngineError, Registry, StandardRuleSet, TradeEngine, Violation, WasmRuleSet};
+use bim_arch::ArchEngine;
+use bim_plugin::{Registry, StandardRuleSet, Violation, WasmRuleSet};
 
 use crate::commands::emit;
-use crate::geometry::{arch_json, parse};
+use crate::geometry::parse;
 use crate::json;
 use crate::project::Project;
 use crate::CliError;
@@ -37,21 +38,8 @@ type Outcome = Result<u8, CliError>;
 /// The registry of the shipped trades and standards.
 pub(crate) fn registry() -> Registry {
     let mut registry = Registry::new();
-    registry.register_engine(Box::new(ArchEngine));
+    registry.register_engine(Box::new(ArchEngine::new()));
     registry
-}
-
-/// The `arch` trade: the architectural quantities of the compiled geometry ([`arch_json`]).
-pub struct ArchEngine;
-
-impl TradeEngine for ArchEngine {
-    fn name(&self) -> &str {
-        "arch"
-    }
-
-    fn solve(&self, ctx: &EngineContext<'_>) -> Result<serde_json::Value, EngineError> {
-        serde_json::from_str(&arch_json(ctx.model())).map_err(|e| EngineError::Plugin(format!("arch: invalid result: {e}")))
-    }
 }
 
 /// `bim solve <dir> --trade <trade> [--json]`.

@@ -1,10 +1,7 @@
 //! The compiled building geometry ([`bim_model`]) and the commands over it:
 //!
-//! * [`arch_json`] is the result of the `arch` trade engine (registered by [`crate::engines`], which
-//!   runs `bim solve`): the architectural quantities (spec/cli.md)
-//!   `{"rooms":[],"walls":[{"id","volume","side_area","layers":[{"material","volume"}]}],
-//!   "slabs":[{"id","volume","area"}],"stairs":[],"curtain_walls":[]}` (rooms, stairs and curtain
-//!   walls come with later engines).
+//! * The `arch` trade's quantities (`bim solve --trade arch`) are computed by `bim_arch::ArchEngine`,
+//!   registered by [`crate::engines`]; this module holds the shared option parser ([`parse`]).
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
 //!   [`bim_model::gltf`]: one mesh node per element with `extras.id`.
 //! * `bim export <dir> --format ifc --out <file>` writes the IFC4 file of [`bim_ifc::export`].
@@ -17,7 +14,6 @@ use std::path::Path;
 
 use bim_model::Model;
 
-use crate::json;
 use crate::project::Project;
 use crate::CliError;
 
@@ -62,49 +58,6 @@ impl Parsed<'_> {
     pub(crate) fn value(&self, flag: &str) -> Option<&OsString> {
         self.values.iter().find(|(f, _)| *f == flag).map(|(_, v)| *v)
     }
-}
-
-/// The `arch` trade's result (spec/cli.md) as JSON text, one line.
-pub(crate) fn arch_json(model: &Model) -> String {
-    let mut s = String::from("{\"rooms\":[],\"walls\":[");
-    for (i, w) in model.walls.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push_str("{\"id\":");
-        json::write_str(&mut s, &w.name);
-        s.push_str(",\"volume\":");
-        json::write_num(&mut s, w.volume);
-        s.push_str(",\"side_area\":");
-        json::write_num(&mut s, w.side_area);
-        s.push_str(",\"layers\":[");
-        for (k, l) in w.layers.iter().enumerate() {
-            if k > 0 {
-                s.push(',');
-            }
-            s.push_str("{\"material\":");
-            json::write_str(&mut s, &l.material);
-            s.push_str(",\"volume\":");
-            json::write_num(&mut s, l.volume);
-            s.push('}');
-        }
-        s.push_str("]}");
-    }
-    s.push_str("],\"slabs\":[");
-    for (i, sl) in model.slabs.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
-        s.push_str("{\"id\":");
-        json::write_str(&mut s, &sl.name);
-        s.push_str(",\"volume\":");
-        json::write_num(&mut s, sl.volume);
-        s.push_str(",\"area\":");
-        json::write_num(&mut s, sl.area);
-        s.push('}');
-    }
-    s.push_str("],\"stairs\":[],\"curtain_walls\":[]}\n");
-    s
 }
 
 /// `bim export <dir> --format gltf|ifc --out <file>`.
@@ -153,6 +106,7 @@ pub(crate) fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), CliError
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::json;
     use crate::testutil::TempDir;
 
     fn run(args: &[&str]) -> (u8, String, String) {
