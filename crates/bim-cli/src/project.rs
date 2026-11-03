@@ -165,6 +165,12 @@ impl Project {
         self.names.get(&id).cloned().unwrap_or_else(|| id.to_string())
     }
 
+    /// The [`bim_plugin::EngineContext`] over the document, naming entities as [`Project::name`]
+    /// does.
+    pub fn engine_context(&self) -> bim_plugin::EngineContext<'_> {
+        bim_plugin::EngineContext::new(&self.doc).with_names(self.names.clone())
+    }
+
     /// The name `id` was written with in the journal (created, referenced or both), if it was.
     pub(crate) fn written_name(&self, id: EntityId) -> Option<&str> {
         self.names.get(&id).map(String::as_str)

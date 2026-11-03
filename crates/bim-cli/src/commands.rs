@@ -250,18 +250,6 @@ pub(crate) fn hash(args: &[OsString], out: &mut dyn Write) -> Outcome {
     Ok(0)
 }
 
-/// `bim validate <dir>`: prints `dangling <source> <key> <target>` for every dangling ref, naming
-/// entities by the seed they were written with. Exit 1 if there is any, else 0 with no output.
-pub(crate) fn validate(args: &[OsString], out: &mut dyn Write) -> Outcome {
-    let [dir] = operands::<1>(args, "validate <dir>")?;
-    let project = Project::open(Path::new(dir))?;
-    let dangling = project.dangling();
-    for d in &dangling {
-        emit(out, &format!("dangling {} {} {}", project.name(d.source), d.key, project.name(d.target)))?;
-    }
-    Ok(u8::from(!dangling.is_empty()))
-}
-
 /// `bim diff <dirA> <dirB>` prints `same` (exit 0) when the documents' content hashes match, else
 /// `differ` (exit 1); both projects are opened before anything is printed.
 ///
@@ -404,7 +392,7 @@ fn operands<'a, const N: usize>(args: &'a [OsString], form: &str) -> Result<&'a 
 }
 
 /// Writes one line of result to stdout.
-fn emit(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
+pub(crate) fn emit(out: &mut dyn Write, line: &str) -> Result<(), CliError> {
     writeln!(out, "{line}").map_err(|e| CliError::Input(format!("cannot write to standard output: {e}")))
 }
 

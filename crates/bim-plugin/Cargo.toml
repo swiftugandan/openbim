@@ -1,0 +1,22 @@
+[package]
+name = "bim-plugin"
+description = "Plugin boundary: TradeEngine / StandardRuleSet traits, Registry, and the WASM component host for rule sets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-model = { path = "../bim-model" }
+serde_json = { version = "=1.0.140", features = ["preserve_order"] }
+anyhow = "=1.0.104"
+wasmtime = { version = "=38.0.0", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "parallel-compilation", "call-hook"] }
+wasmtime-wasi = { version = "=38.0.0", default-features = false, features = ["p2"] }
+# Only to name the types of wasmtime-wasi's stream traits (`Bytes`, `AsyncWrite`); both are already
+# in the lock as wasmtime-wasi's own dependencies.
+bytes = "=1.12.1"
+tokio = { version = "=1.54.1", default-features = false }
+
+[dev-dependencies]
+wat = "=1.263.0"
