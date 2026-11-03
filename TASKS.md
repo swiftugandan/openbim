@@ -389,7 +389,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M6 Agent interface
 
-- [ ] T6.1: Datalog query engine over the semantic graph
+- [x] T6.1: Datalog query engine over the semantic graph
   - Files: Cargo.toml, Cargo.lock, crates/bim-query/, crates/bim-cli/
   - Opens: T4.5, T4.6, T4.2
   - Needs: .oracles/py/bin/python
