@@ -531,7 +531,7 @@ pub fn pushpull(shape: &mut Shape, id: u64, distance: f64, new: bool) -> Result<
 
 /// Replaces the edge `x → y` (either direction) of a stretched face by the path through the moved
 /// copies `nx`, `ny` of its ends.
-fn splice(face: &mut Face, x: usize, y: usize, nx: usize, ny: usize) {
+pub(crate) fn splice(face: &mut Face, x: usize, y: usize, nx: usize, ny: usize) {
     for lp in &mut face.loops {
         let n = lp.len();
         for i in 0..n {
@@ -561,7 +561,7 @@ fn splice(face: &mut Face, x: usize, y: usize, nx: usize, ny: usize) {
 /// equal to the other (or to one of its holes) removes it; a moved face sharing part of its
 /// boundary shrinks the other. The other face keeps its id; when it splits, the part holding its
 /// first outer-loop vertex keeps it. The moved face's holes, left uncovered, become new faces.
-fn punch_through(shape: &mut Shape, id: u64) {
+pub(crate) fn punch_through(shape: &mut Shape, id: u64) {
     let Some(f) = shape.face_by_id(id) else { return };
     let Some(plane) = shape.face_plane(f) else { return };
     let n = plane.n;
@@ -665,7 +665,7 @@ fn punch_through(shape: &mut Shape, id: u64) {
 }
 
 /// Whether two loops are the same cycle of vertices (either direction, any start).
-fn same_cycle(a: &[usize], b: &[usize]) -> bool {
+pub(crate) fn same_cycle(a: &[usize], b: &[usize]) -> bool {
     if a.len() != b.len() || a.is_empty() {
         return false;
     }
