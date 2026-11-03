@@ -19,6 +19,7 @@ name = "bim-cli"
 version = "0.1.0"
 dependencies = [
  "bim-doc",
+ "bim-ifc",
  "bim-model",
  "bim-schema",
  "bim-store",
@@ -44,6 +45,10 @@ version = "0.1.0"
 [[package]]
 name = "bim-ifc"
 version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-model",
+]
 
 [[package]]
 name = "bim-model"

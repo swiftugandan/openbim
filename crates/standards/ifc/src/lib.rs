@@ -17,6 +17,7 @@
 //! * [`guid`] converts IFC GlobalIds (22-character base-64) to and from 128-bit values.
 
 mod error;
+pub mod export;
 pub mod guid;
 mod model;
 mod reader;

@@ -6,8 +6,9 @@
 //!   walls come with later engines). Without `--json` it prints one line per wall and slab. Any
 //!   other trade is a usage error (exit 2).
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
-//!   [`bim_model::gltf`]: one mesh node per element with `extras.id`. Any other format is a usage
-//!   error (exit 2). The file is written to a temporary file next to it and renamed into place.
+//!   [`bim_model::gltf`]: one mesh node per element with `extras.id`.
+//! * `bim export <dir> --format ifc --out <file>` writes the IFC4 file of [`bim_ifc::export`].
+//!   Any other format is a usage error (exit 2). The file is written to a temporary file next to it and renamed into place.
 
 use std::ffi::OsString;
 use std::fs;
@@ -131,7 +132,7 @@ fn arch_text(model: &Model) -> String {
     s
 }
 
-/// `bim export <dir> --format gltf --out <file>`.
+/// `bim export <dir> --format gltf|ifc --out <file>`.
 pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let form = "export <dir> --format <format> --out <file>";
     let p = parse(args, &["--format", "--out"], form)?;
@@ -140,12 +141,20 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     }
     let format = p.value("--format").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--format` is required")))?;
     let file = p.value("--out").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--out` is required")))?;
-    if format != "gltf" {
-        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf)", format.to_string_lossy())));
+    if format != "gltf" && format != "ifc" {
+        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc)", format.to_string_lossy())));
     }
     let project = Project::open(Path::new(p.positional[0]))?;
-    let model = Model::compile(&project.doc);
-    let text = bim_model::gltf::to_gltf(&model.elements);
+    let text = if format == "ifc" {
+        let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let text = bim_ifc::export::export_ifc4_string(&project.doc, &name);
+        if text.is_empty() {
+            return Err(CliError::Input(format!("{}: the model has values IFC cannot represent", Path::new(file).display())));
+        }
+        text
+    } else {
+        bim_model::gltf::to_gltf(&Model::compile(&project.doc).elements)
+    };
     write_atomically(Path::new(file), text.as_bytes())?;
     Ok(0)
 }
@@ -205,6 +214,14 @@ mod tests {
         let text = fs::read_to_string(&gl).unwrap();
         assert!(json::parse(&text).is_ok());
         assert!(text.contains("\"extras\":{\"id\":\"W\""));
+        let ifc = tmp.path().join("m.ifc");
+        let (code, out, err) = run(&["export", d, "--format", "ifc", "--out", ifc.to_str().unwrap()]);
+        assert_eq!((code, out.as_str()), (0, ""), "{err}");
+        let text = fs::read_to_string(&ifc).unwrap();
+        assert!(text.starts_with("ISO-10303-21;") && text.contains("FILE_SCHEMA(('IFC4'));"), "{text}");
+        let wall = bim_ifc::export::entity_guid(bim_doc::EntityId::derive("W"));
+        assert!(text.contains(&format!("IFCWALL('{wall}'")), "{text}");
+        assert!(text.contains("IFCSLAB(") && text.contains("'Pset_WallCommon'"));
     }
 
     #[test]
