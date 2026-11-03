@@ -12,12 +12,17 @@
 //! restores the structural rules after every operation: points within 1e-9 m are one vertex, no
 //! T-junctions, no degenerate faces. The remaining ops of spec/sketch.md (`offset`, `followme`,
 //! `move`/`rotate`/`scale`, `paint`, `make_component`) are later tasks and are rejected as invalid.
+//!
+//! [`infer`] is the inference engine drawing tools snap with ([`InferScene`], [`infer_json`]) and
+//! [`measure`] parses typed measurements ([`parse_measurement`]).
 
 #![forbid(unsafe_code)]
 
 pub mod command;
 pub mod geom;
+pub mod infer;
 mod json;
+pub mod measure;
 pub mod ops;
 pub mod planar;
 pub mod shape;
@@ -28,6 +33,8 @@ use std::fmt;
 use bim_doc::{Document, EntityId, Op, Value};
 
 pub use command::{Command, Op as SketchOp};
+pub use infer::{infer_json, InferScene};
+pub use measure::{parse_measurement, Measurement};
 pub use shape::{Face, Shape};
 
 /// Why a command file could not be applied: nothing is changed.

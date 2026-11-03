@@ -203,7 +203,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: spec/sketch.md commands `offset`, `followme`, `move`, `rotate`, `scale` (stretching, triangle fan for non-planar faces, `copy` and `array`), `paint` and `make_component`, plus `ComponentDefinition`/`ComponentInstance` placement: each instance is its definition's Shape under the instance transform in glTF export and solids; the definition's Shape is not placed itself; editing it changes every instance.
   - Details: Same entry point `bim_sketch::run`. Volumes, areas and face counts after each command follow closed forms (e.g. follow-me of a square along an L path; offset of a rectangle by d leaves an inner (w − 2d)(h − 2d) face).
 
-- [ ] T2.12: direct modelling III: inference engine and typed measurements
+- [x] T2.12: direct modelling III: inference engine and typed measurements
   - Files: Cargo.lock, crates/bim-sketch/
   - Opens: T2.10, T2.3
   - Verification: bash judges/T2.12.sh
