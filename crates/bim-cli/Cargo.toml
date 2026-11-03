@@ -24,6 +24,7 @@ bim-ifc = { path = "../standards/ifc" }
 bim-mep = { path = "../engines/mep" }
 bim-model = { path = "../bim-model" }
 bim-plugin = { path = "../bim-plugin" }
+bim-query = { path = "../bim-query" }
 bim-schema = { path = "../bim-schema" }
 bim-sketch = { path = "../bim-sketch" }
 bim-store = { path = "../bim-store" }

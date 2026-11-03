@@ -105,6 +105,7 @@ dependencies = [
  "bim-mep",
  "bim-model",
  "bim-plugin",
+ "bim-query",
  "bim-schema",
  "bim-sketch",
  "bim-store",
@@ -196,6 +197,18 @@ dependencies = [
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+]
+
+[[package]]
+name = "bim-query"
+version = "0.1.0"
+dependencies = [
+ "bim-arch",
+ "bim-doc",
+ "bim-mep",
+ "bim-model",
+ "bim-plugin",
+ "serde_json",
 ]
 
 [[package]]

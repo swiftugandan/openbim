@@ -22,6 +22,7 @@
 //! | `bim bcf <dir> import <file.bcfzip>` | mirrors every topic of a BCF 3.0 archive as an `Issue` entity, atomically; a file that is not a BCF 3.0 archive, or a component that is not an entity of the project, exits 2 with nothing applied |
 //! | `bim sketch <dir> <file.json>` | applies the file's direct-modelling commands (spec/sketch.md) through `bim-sketch`, all or none; an invalid command exits 2 |
 //! | `bim import <dir> <file.ifc>` | adds the building elements of an IFC4 or IFC2X3 file as ops (`bim_ifc::import`), all or none; a file that does not parse, of another schema (e.g. IFC4X3) or with a dangling reference under a product exits 2 with nothing applied; skipped elements are reported as `bim: warning:` lines on stderr |
+//! | `bim query <dir> <program-file> <atom> [--json] [--naive]` | evaluates the Datalog program (spec/mcp.md) over the document's built-in relations (`bim_query`) and prints the rows answering `<atom>`, sorted and deduplicated as the MCP `query` tool's: `--json` prints `{"rows": […]}`; `--naive` evaluates by naive iteration (same rows); a program that does not parse or cannot be stratified exits 2 (see the private `query` module) |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -55,6 +56,7 @@ mod geometry;
 pub mod json;
 pub mod ops;
 pub mod project;
+mod query;
 pub mod store;
 mod sync;
 
@@ -84,7 +86,8 @@ pub const USAGE: &str = "usage:
   bim bcf <dir> export <file.bcfzip>
   bim bcf <dir> import <file.bcfzip>
   bim sketch <dir> <file.json>
-  bim import <dir> <file.ifc>";
+  bim import <dir> <file.ifc>
+  bim query <dir> <program-file> <atom> [--json] [--naive]";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -168,6 +171,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("bcf") => bcf::bcf(operands, out),
         Some("sketch") => commands::sketch(operands, out),
         Some("import") => commands::import(operands, out),
+        Some("query") => query::query(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
     }
 }
