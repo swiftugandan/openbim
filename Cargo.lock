@@ -94,6 +94,7 @@ dependencies = [
  "bim-schema",
  "bim-sketch",
  "bim-store",
+ "bim-struct",
  "bim-sync",
  "serde_json",
 ]
@@ -180,6 +181,11 @@ dependencies = [
 [[package]]
 name = "bim-struct"
 version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-plugin",
+ "serde_json",
+]
 
 [[package]]
 name = "bim-sync"
