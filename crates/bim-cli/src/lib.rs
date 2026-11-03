@@ -15,7 +15,8 @@
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade <trade> [--method newton\|hardy-cross] [--json]` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document (without `--json`, as one text line per reported element); `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); `mep` the pipe/duct network hydraulics (`bim-mep`), `--method` choosing its network solver; an unknown trade or method exits 2 (see the private `engines` and `geometry` modules) |
-//! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
+//! | `bim clash <dir> [--clearance <m>] [--json]` | prints the hard clashes (the solids of two elements share volume) and soft clashes (not hard, closer than `--clearance` metres, default none) between the compiled elements, joined walls excluded, as `{"hard":[{"a","b","volume"}],"soft":[{"a","b","distance"}],"matrix":{"<KindA>":{"<KindB>":count}}}` (without `--json`, one `hard <a> <b> <volume>` / `soft <a> <b> <distance>` line each); exit 1 if there is any hard clash; a `--clearance` that is not a non-negative number exits 2 (see the private `clash` module and [`bim_model::clash`]) |
+//! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element, building elements, MEP segments and direct-modelling Shapes, an open-surface Shape's node being open, with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
 //! | `bim export <dir> --format svg --view <view> --out <file>` | writes the 2D drawing of `<view>` (`plan:<level>@<h>`, `section:<x0>,<y0>,<x1>,<y1>`, `elevation:<n\|s\|e\|w>`) built by `bim-draw`: layers CUT, PROJECTION, HIDDEN, HATCH, DIMENSION, ANNOTATION as `<g id>`, paper mm at 1:100, `data-entity` on every element; an unknown or unparseable view exits 2 |
 //! | `bim bcf <dir> create --title <t> --entity <id> [<id>…]` | makes a BCF 3.0 topic about those entities, mirrors it as an `Issue` entity (id = the topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to the components) and prints the Guid as its only output line (see the private `bcf` module) |
 //! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
@@ -25,7 +26,7 @@
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
 //! * `0` success;
-//! * `1` the command ran and found a problem (`validate` found dangling refs, conflicts or violations, `diff` found a difference);
+//! * `1` the command ran and found a problem (`validate` found dangling refs, conflicts or violations, `diff` found a difference, `clash` found a hard clash);
 //! * `2` the command could not run: wrong usage, an invalid ops file or op (an undeclared kind or a
 //!   broken extension prop included), an unknown or deleted entity for `show`, an unknown revision, a missing directory, a
 //!   directory that is not a project, a malformed or inconsistent trade package, an unreadable or
@@ -47,6 +48,7 @@
 #![forbid(unsafe_code)]
 
 mod bcf;
+mod clash;
 mod commands;
 mod engines;
 mod geometry;
@@ -76,6 +78,7 @@ pub const USAGE: &str = "usage:
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
   bim solve <dir> --trade <trade> [--method newton|hardy-cross] --json
+  bim clash <dir> [--clearance <m>] --json
   bim export <dir> --format gltf|ifc --out <file>
   bim export <dir> --format svg --view <view> --out <file>
   bim bcf <dir> create --title <t> --entity <id> [<id>…]
@@ -161,6 +164,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("plugin") => commands::plugin(operands, out),
         Some("sync") => commands::sync(operands, out),
         Some("solve") => engines::solve(operands, out),
+        Some("clash") => clash::clash_command(operands, out),
         Some("export") => geometry::export(operands, out),
         Some("bcf") => bcf::bcf(operands, out),
         Some("sketch") => commands::sketch(operands, out),
@@ -244,7 +248,7 @@ mod tests {
 
     #[test]
     fn usage_errors_exit_2_with_usage_on_stderr_only() {
-        let cases: [&[&str]; 45] = [
+        let cases: [&[&str]; 51] = [
             &[],
             &["frobnicate"],
             &["--help"],
@@ -290,6 +294,12 @@ mod tests {
             &["sketch"],
             &["sketch", "d"],
             &["sketch", "d", "f.json", "extra"],
+            &["clash"],
+            &["clash", "a", "b"],
+            &["clash", "d", "--clearance"],
+            &["clash", "d", "--clearance", "x"],
+            &["clash", "d", "--clearance", "-1"],
+            &["clash", "d", "--clearance", "1", "--clearance", "2"],
         ];
         for args in cases {
             let (code, out, err) = run_str(args);

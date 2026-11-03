@@ -12,10 +12,13 @@
 //! | `CurtainWall` | the union of its mullions and panels: grid lines every `u_spacing` along the centreline and `v_spacing` up it, the last bay taking the remainder; a `mullion_width` × `mullion_depth` mullion on every grid line (vertical ones level to level + `height`, horizontal ones the full length), a `panel_thickness` panel between the mullion faces of each bay |
 //! | `Stair` | the union of `riser_count` blocks, block `k` spanning `[(k−1)·tread, k·tread]` along the run from (x, y) in direction `angle`, `width` across (centred), from the base level up by `k` risers of (top − base) / `riser_count` |
 //! | `Ramp` | the wedge over the `length` × `width` rectangle from (x, y) in direction `angle` (centred): underside at the base level, top rising linearly to the top level at the far end; none when the top is not above the base |
+//! | `Segment` | the prism from its `from` Port's `x y z` to its `to` Port's ([`segment`]): `round` a 16-gon with every vertex at radius `diameter / 2`, `rect` `width` horizontal and perpendicular to the axis by `height` vertical |
 //!
 //! Direct-modelling `Shape`s and `ComponentInstance`s (spec/sketch.md) are compiled by [`shape`]:
 //! one element each, the Shape's faces triangulated and placed by its `transform`; closed Shapes
 //! give closed meshes with their exact volume, open surfaces single-sided open meshes.
+//!
+//! [`clash`] finds the hard and soft clashes between the compiled elements (`bim clash`).
 //!
 //! Joins are found in plan only: an L-join is two wall endpoints within 1e-6, a T-join a wall
 //! endpoint within 1e-6 of the interior of another wall's centreline. Walls are visited in order of
@@ -54,11 +57,13 @@
 #![forbid(unsafe_code)]
 
 mod arch;
+pub mod clash;
 pub mod gltf;
 pub mod mesh;
+pub mod segment;
 pub mod shape;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bim_doc::{Document, Entity, EntityId, Value};
 use bim_geom::{boolean, BoolOp, Point2, Point3, Polygon, Solid};
@@ -75,8 +80,8 @@ pub struct Element {
     pub id: EntityId,
     /// The id the entity was created with (its `_name`, else the id's string form).
     pub name: String,
-    /// The entity kind (`Wall`, `Slab`, `Column`, `Beam`, `CurtainWall`, `Stair`, `Ramp`, `Shape`,
-    /// `ComponentInstance`).
+    /// The entity kind (`Wall`, `Slab`, `Column`, `Beam`, `CurtainWall`, `Stair`, `Ramp`, `Segment`,
+    /// `Shape`, `ComponentInstance`).
     pub kind: String,
     /// Boundary mesh in the model frame (metres, z up): closed and outward-oriented for every
     /// building element and every closed Shape; an open-surface Shape's mesh is open.
@@ -409,6 +414,26 @@ fn find_joins(walls: &[WallIn]) -> Vec<[EndJoins; 2]> {
         .collect()
 }
 
+/// Every unordered pair of joined walls, as `(min, max)` of their ids: at each wall end, all the
+/// walls with an endpoint there (L-joins) and the through wall of a T-join. (A wall's [`WallGeom`]
+/// reports only the primary join per end; at a cross junction there are more.) Walls are taken as
+/// [`Model::compile`] takes them, so a wall without a solid description is not in any pair.
+pub(crate) fn joined_wall_pairs(doc: &Document) -> HashSet<(EntityId, EntityId)> {
+    let mut ents: Vec<&Entity> = doc.entities().collect();
+    ents.sort_by_cached_key(|e| entity_name(e));
+    let walls: Vec<WallIn> = ents.iter().filter(|e| e.kind == "Wall").filter_map(|e| wall_in(doc, e)).collect();
+    let mut pairs = HashSet::new();
+    for (wi, ends) in find_joins(&walls).iter().enumerate() {
+        for end in ends {
+            for oi in end.l.iter().map(|&(oi, _)| oi).chain(end.t) {
+                let (a, b) = (walls[wi].e.id, walls[oi].e.id);
+                pairs.insert((a.min(b), a.max(b)));
+            }
+        }
+    }
+    pairs
+}
+
 /// The side (±1) of the through wall `o`'s centreline that a wall leaving it in direction `d` lies on.
 fn side_of(o: &WallIn, d: [f64; 2]) -> f64 {
     if dot(o.left, d) > 0.0 {
@@ -494,9 +519,9 @@ fn opening_slot(doc: &Document, op: &Entity, w: &WallIn) -> Option<Slot> {
 // ------------------------------------------------------------------ compile
 
 impl Model {
-    /// Compiles every Wall, Slab, Column, Beam, CurtainWall, Stair and Ramp of `doc`, and every
-    /// placed Shape and ComponentInstance ([`shape::shape_elements`]). Never panics on bad input:
-    /// an element that cannot be built is left out.
+    /// Compiles every Wall, Slab, Column, Beam, CurtainWall, Stair, Ramp and MEP Segment of `doc`,
+    /// and every placed Shape and ComponentInstance ([`shape::shape_elements`]). Never panics on
+    /// bad input: an element that cannot be built is left out.
     pub fn compile(doc: &Document) -> Model {
         let mut model = Model::default();
         let mut ents: Vec<&Entity> = doc.entities().collect();
@@ -603,6 +628,11 @@ impl Model {
                 "Ramp" => {
                     if let Some(mesh) = arch::ramp(doc, e) {
                         model.elements.push(Element { id: e.id, name: entity_name(e), kind: "Ramp".into(), mesh });
+                    }
+                }
+                "Segment" => {
+                    if let Some(mesh) = segment::segment_element(doc, e) {
+                        model.elements.push(Element { id: e.id, name: entity_name(e), kind: "Segment".into(), mesh });
                     }
                 }
                 _ => {}

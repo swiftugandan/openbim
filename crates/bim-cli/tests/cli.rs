@@ -1953,3 +1953,109 @@ fn sketch_applies_the_spec_example_atomically_and_exports_it() {
     let text = fs::read_to_string(&out).unwrap();
     assert!(text.contains(r#""extras":{"id":"box","kind":"Shape"}"#), "{text}");
 }
+
+// ---- MEP circuits, segment solids and `bim clash` (T4.7) ---------------------------------
+
+/// A wall, a pipe through it, a thinner pipe 4 cm off its face, and a circuit.
+const MEP_SCENE: &str = r#"{"schema": 1, "ops": [
+  {"op": "create", "id": "L0", "kind": "Level", "props": {"elevation": 0}},
+  {"op": "create", "id": "WT", "kind": "WallType", "props": {"layer_thickness": [0.1, 0.1], "layer_material": ["a", "b"]}},
+  {"op": "create", "id": "W", "kind": "Wall", "props": {"level": {"ref": "L0"}, "type": {"ref": "WT"}, "x1": 0, "y1": 0, "x2": 6, "y2": 0, "height": 3}},
+  {"op": "create", "id": "WS", "kind": "MepSystem", "props": {"name": "w", "medium": "water", "density": 998.2, "viscosity": 0.001002}},
+  {"op": "create", "id": "pa", "kind": "Port", "props": {"system": {"ref": "WS"}, "x": 2, "y": -1, "z": 1.5, "kind": "source", "pressure": 200000}},
+  {"op": "create", "id": "pb", "kind": "Port", "props": {"system": {"ref": "WS"}, "x": 2, "y": 1, "z": 1.5, "kind": "sink", "flow": 0.001}},
+  {"op": "create", "id": "P", "kind": "Segment", "props": {"from": {"ref": "pa"}, "to": {"ref": "pb"}, "shape": "round", "diameter": 0.1, "roughness": 0.0001}},
+  {"op": "create", "id": "qa", "kind": "Port", "props": {"system": {"ref": "WS"}, "x": 3.5, "y": 0.18, "z": 1.5, "kind": "source", "pressure": 200000}},
+  {"op": "create", "id": "qb", "kind": "Port", "props": {"system": {"ref": "WS"}, "x": 5.5, "y": 0.18, "z": 1.5, "kind": "sink", "flow": 0.001}},
+  {"op": "create", "id": "Q", "kind": "Segment", "props": {"from": {"ref": "qa"}, "to": {"ref": "qb"}, "shape": "round", "diameter": 0.08, "roughness": 0.0001}},
+  {"op": "create", "id": "e0", "kind": "Port", "props": {"system": {"ref": "WS"}, "kind": "junction"}},
+  {"op": "create", "id": "e1", "kind": "Port", "props": {"system": {"ref": "WS"}, "kind": "junction"}},
+  {"op": "create", "id": "C1", "kind": "Circuit", "props": {"panel": {"ref": "e0"}, "voltage": 230, "loads": [{"ref": "e1"}], "load_watts": [2300],
+    "conductor_area": 0.0000025, "resistivity": 0.0000000172, "length": 30}}
+]}"#;
+
+fn field<'a>(object: &'a Json, key: &str) -> &'a Json {
+    let Json::Object(members) = object else { panic!("{object:?} is not an object") };
+    &members.iter().find(|(k, _)| k == key).unwrap_or_else(|| panic!("no `{key}` in {object:?}")).1
+}
+
+fn number(value: &Json) -> f64 {
+    let Json::Num(x) = value else { panic!("{value:?} is not a number") };
+    *x
+}
+
+fn array(value: &Json) -> &[Json] {
+    let Json::Array(items) = value else { panic!("{value:?} is not an array") };
+    items
+}
+
+fn text(value: &Json) -> &str {
+    let Json::Str(s) = value else { panic!("{value:?} is not a string") };
+    s
+}
+
+#[test]
+fn clash_and_circuits_through_the_binary() {
+    let s = Scratch::new();
+    let dir = s.project("p", "");
+    let ops = s.write("scene.json", MEP_SCENE);
+    bim(&[&"apply", &dir, &ops]).expect(0);
+    let before = hash(&dir);
+
+    // The pipe through the wall is a hard clash of the pipe's 16-gon section times the wall's thickness.
+    let run = bim(&[&"clash", &dir, &"--json"]).expect(1);
+    assert_eq!(run.err, "");
+    assert_eq!(run.out.matches('\n').count(), 1, "one document");
+    let doc = json::parse(&run.out).unwrap();
+    let hard = array(field(&doc, "hard"));
+    assert_eq!(hard.len(), 1, "{}", run.out);
+    assert_eq!((text(field(&hard[0], "a")), text(field(&hard[0], "b"))), ("P", "W"));
+    let a16 = 8.0 * (std::f64::consts::PI / 8.0).sin() * 0.05 * 0.05;
+    assert!((number(field(&hard[0], "volume")) - a16 * 0.2).abs() < 1e-12 * a16);
+    assert!(array(field(&doc, "soft")).is_empty(), "no clearance, no soft clashes");
+    assert!(run.out.ends_with("\"matrix\":{\"Segment\":{\"Wall\":1}}}\n"), "{}", run.out);
+
+    // With a clearance the pipe Q is soft: its centre is 0.18 off the centreline, its nearest vertex
+    // 0.18 − 0.04 = 0.14 from it, 0.04 from the wall's face at 0.1.
+    let run = bim(&[&"clash", &dir, &"--clearance", &"0.05", &"--json"]).expect(1);
+    let doc = json::parse(&run.out).unwrap();
+    let soft = array(field(&doc, "soft"));
+    assert_eq!(soft.len(), 1, "{}", run.out);
+    assert_eq!((text(field(&soft[0], "a")), text(field(&soft[0], "b"))), ("Q", "W"));
+    assert!((number(field(&soft[0], "distance")) - 0.04).abs() < 1e-12);
+    let run = bim(&[&"clash", &dir, &"--clearance", &"0.035", &"--json"]).expect(1);
+    assert!(array(field(&json::parse(&run.out).unwrap(), "soft")).is_empty());
+
+    // A bad clearance is a usage error, found before anything is read.
+    for bad in ["x", "-0.5", "nan"] {
+        let run = bim(&[&"clash", &dir, &"--clearance", &bad, &"--json"]).rejected();
+        assert!(run.err.contains("usage:") && run.err.contains("--clearance"), "{}", run.err);
+    }
+    bim(&[&"clash", &s.path("nope"), &"--json"]).rejected();
+    bim(&[&"clash", &dir, &"--json", &"--json"]).rejected();
+
+    // The circuit: 10 A through 2 · 30 m of copper at 2.5 mm² drops 8 V, 3.4783 % of 230 V.
+    let run = bim(&[&"solve", &dir, &"--trade", &"mep", &"--json"]).expect(0);
+    let doc = json::parse(&run.out).unwrap();
+    let circuits = array(field(&doc, "circuits"));
+    assert_eq!(circuits.len(), 1);
+    assert_eq!(text(field(&circuits[0], "id")), "C1");
+    assert_eq!(number(field(&circuits[0], "current")), 10.0);
+    assert!((number(field(&circuits[0], "voltage_drop")) - 10.0 * 2.0 * 1.72e-8 * 30.0 / 2.5e-6).abs() < 1e-12);
+    assert!((number(field(&circuits[0], "voltage_drop_pct")) - 100.0 * 4.128 / 230.0).abs() < 1e-9);
+    // The circuit's ports are no hydraulic nodes; the segments are sized.
+    let ports: Vec<&str> = array(field(&doc, "ports")).iter().map(|p| text(field(p, "id"))).collect();
+    assert_eq!(ports, ["pa", "pb", "qa", "qb"], "e0 and e1 are only the circuit's");
+    assert!(array(field(&doc, "segments")).iter().all(|seg| text(field(seg, "size")).starts_with("DN")));
+
+    // The segments are solids in the glTF export, with the entity name as `extras.id`.
+    let out = s.path("mep.gltf");
+    bim(&[&"export", &dir, &"--format", &"gltf", &"--out", &out]).expect(0);
+    let gltf = fs::read_to_string(&out).unwrap();
+    for id in ["P", "Q", "W"] {
+        assert!(gltf.contains(&format!("\"extras\":{{\"id\":\"{id}\"")), "{id}: {gltf}");
+    }
+    assert!(gltf.contains("\"extras\":{\"id\":\"P\",\"kind\":\"Segment\"}"), "{gltf}");
+    // None of this changed the project.
+    assert_eq!(hash(&dir), before);
+}

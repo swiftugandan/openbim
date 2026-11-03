@@ -645,3 +645,406 @@ fn compiling_arbitrary_curtain_wall_stair_and_ramp_props_never_panics() {
         }
     }
 }
+
+// ------------------------------------------------------------------ MEP segments
+
+fn port(b: &mut B, name: &str, p: [f64; 3]) {
+    b.add(name, "Port", &[("x", n(p[0])), ("y", n(p[1])), ("z", n(p[2])), ("kind", Value::Text("junction".into()))]);
+}
+
+#[test]
+fn segments_are_elements_named_after_the_entity() {
+    let mut b = B::new();
+    port(&mut b, "pa", [2.0, -1.0, 1.5]);
+    port(&mut b, "pb", [2.0, 1.0, 1.5]);
+    port(&mut b, "pc", [4.0, 0.0, 1.0]);
+    // Neither a system nor a roughness nor any hydraulics is needed for a solid.
+    b.add("P1", "Segment", &[("from", r("pa")), ("to", r("pb")), ("shape", Value::Text("round".into())), ("diameter", n(0.1))]);
+    b.add("D1", "Segment", &[
+        ("from", r("pa")), ("to", r("pc")), ("shape", Value::Text("rect".into())), ("width", n(0.4)), ("height", n(0.3)),
+    ]);
+    let m = Model::compile(&b.0);
+    assert_eq!(m.elements.iter().map(|e| (e.name.as_str(), e.kind.as_str())).collect::<Vec<_>>(), [("D1", "Segment"), ("P1", "Segment")]);
+    let p1 = m.elements.iter().find(|e| e.name == "P1").unwrap();
+    assert_eq!(p1.id, EntityId::derive("P1"));
+    assert!(p1.mesh.is_closed());
+    let (lo, hi) = p1.mesh.bounds().unwrap();
+    assert!((lo.y + 1.0).abs() < 1e-12 && (hi.y - 1.0).abs() < 1e-12, "runs between the ports");
+    let a16 = 8.0 * (std::f64::consts::PI / 8.0).sin() * 0.05 * 0.05;
+    assert!((p1.mesh.volume() - a16 * 2.0).abs() < 1e-12);
+    let d1 = m.elements.iter().find(|e| e.name == "D1").unwrap();
+    let len = (4.0f64 + 1.0 + 0.25).sqrt();
+    assert!((d1.mesh.volume() - 0.4 * 0.3 * len).abs() < 1e-12);
+    check_closed(&m);
+    // Segments leave the quantities of the architectural trade alone.
+    assert!(m.walls.is_empty() && m.slabs.is_empty() && m.stairs.is_empty() && m.curtain_walls.is_empty());
+}
+
+#[test]
+fn a_segment_without_a_usable_description_has_no_solid() {
+    let mut b = B::new();
+    port(&mut b, "pa", [0.0, 0.0, 0.0]);
+    port(&mut b, "pb", [1.0, 0.0, 0.0]);
+    b.add("nowhere", "Wall", &[]); // not a Port
+    b.add("pn", "Port", &[("x", n(1.0)), ("y", n(1.0))]); // no z
+    let round = |b: &mut B, name: &str, from: &str, to: &str, extra: &[(&str, Value)]| {
+        let mut props = vec![("from", r(from)), ("to", r(to)), ("shape", Value::Text("round".into()))];
+        props.extend(extra.iter().cloned());
+        b.add(name, "Segment", &props);
+    };
+    round(&mut b, "ok", "pa", "pb", &[("diameter", n(0.05))]);
+    round(&mut b, "no_diameter", "pa", "pb", &[]);
+    round(&mut b, "zero_diameter", "pa", "pb", &[("diameter", n(0.0))]);
+    round(&mut b, "dangling", "pa", "gone", &[("diameter", n(0.05))]);
+    round(&mut b, "not_a_port", "pa", "nowhere", &[("diameter", n(0.05))]);
+    round(&mut b, "no_z", "pa", "pn", &[("diameter", n(0.05))]);
+    round(&mut b, "same_place", "pa", "pa", &[("diameter", n(0.05))]);
+    b.add("unknown_shape", "Segment", &[("from", r("pa")), ("to", r("pb")), ("shape", Value::Text("oval".into())), ("diameter", n(0.05))]);
+    b.add("no_shape", "Segment", &[("from", r("pa")), ("to", r("pb")), ("diameter", n(0.05))]);
+    b.add("rect_no_height", "Segment", &[("from", r("pa")), ("to", r("pb")), ("shape", Value::Text("rect".into())), ("width", n(0.3))]);
+    b.add("no_from", "Segment", &[("to", r("pb")), ("shape", Value::Text("round".into())), ("diameter", n(0.05))]);
+    let m = Model::compile(&b.0);
+    assert_eq!(m.elements.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["ok"]);
+}
+
+#[test]
+fn moving_a_port_moves_the_segment() {
+    let mut b = B::new();
+    port(&mut b, "pa", [0.0, 0.0, 0.0]);
+    port(&mut b, "pb", [1.0, 0.0, 0.0]);
+    b.add("s", "Segment", &[("from", r("pa")), ("to", r("pb")), ("shape", Value::Text("round".into())), ("diameter", n(0.1))]);
+    b.0.apply(bim_doc::Op::Set { id: EntityId::derive("pb"), key: "x".into(), value: n(3.0) }).unwrap();
+    let m = Model::compile(&b.0);
+    assert!((m.elements[0].mesh.bounds().unwrap().1.x - 3.0).abs() < 1e-12);
+}
+
+// ------------------------------------------------------------------ clashes
+
+fn t(s: &str) -> Value {
+    Value::Text(s.into())
+}
+
+fn clashes(b: &B, clearance: f64) -> clash::ClashReport {
+    clash::clash(&b.0, &Model::compile(&b.0), clearance)
+}
+
+fn hard_names(r: &clash::ClashReport) -> Vec<(&str, &str)> {
+    r.hard.iter().map(|c| (c.a.as_str(), c.b.as_str())).collect()
+}
+
+fn soft_names(r: &clash::ClashReport) -> Vec<(&str, &str)> {
+    r.soft.iter().map(|c| (c.a.as_str(), c.b.as_str())).collect()
+}
+
+/// A column of `size` × `size` centred on (x, y) between the elevations of levels `base` and `top`.
+fn column_at(b: &mut B, name: &str, x: f64, y: f64, size: f64, base: &str, top: &str) {
+    b.add(name, "Column", &[
+        ("x", n(x)), ("y", n(y)), ("base", r(base)), ("top", r(top)), ("section_b", n(size)), ("section_h", n(size)),
+    ]);
+}
+
+/// Levels `Z0` (0 m), `Z1` (1 m), `Z2` (2 m), `Z3` (3 m), `Z4` (4 m).
+fn five_levels() -> B {
+    let mut b = B::new();
+    for k in 0..5 {
+        b.add(&format!("Z{k}"), "Level", &[("elevation", n(k as f64))]);
+    }
+    b
+}
+
+/// A segment between two new ports (`<name>a`, `<name>b`), `dims` = [diameter] or [width, height].
+fn segment_at(b: &mut B, name: &str, from: [f64; 3], to: [f64; 3], dims: &[f64]) {
+    port(b, &format!("{name}a"), from);
+    port(b, &format!("{name}b"), to);
+    let mut props = vec![("from", r(&format!("{name}a"))), ("to", r(&format!("{name}b")))];
+    if let [d] = dims {
+        props.extend([("shape", t("round")), ("diameter", n(*d))]);
+    } else {
+        props.extend([("shape", t("rect")), ("width", n(dims[0])), ("height", n(dims[1]))]);
+    }
+    b.add(name, "Segment", &props);
+}
+
+#[test]
+fn overlapping_boxes_clash_by_the_exact_common_volume() {
+    let mut b = five_levels();
+    column_at(&mut b, "A", 0.0, 0.0, 1.0, "Z0", "Z3");
+    column_at(&mut b, "B", 0.5, 0.25, 1.0, "Z1", "Z4"); // overlaps A in 0.5 × 0.75 × 2
+    column_at(&mut b, "C", 7.0, 0.0, 1.0, "Z0", "Z3"); // far away
+    let r = clashes(&b, 0.0);
+    assert_eq!(hard_names(&r), [("A", "B")]);
+    assert!((r.hard[0].volume - 0.5 * 0.75 * 2.0).abs() < 1e-14, "{}", r.hard[0].volume);
+    assert!(r.soft.is_empty());
+    assert_eq!(r.matrix, std::collections::BTreeMap::from([("Column".to_string(), std::collections::BTreeMap::from([("Column".to_string(), 1)]))]));
+    // The default clearance is none: the same report with it.
+    assert_eq!(clashes(&b, clash::DEFAULT_CLEARANCE), r);
+    // Clearance does not change what is hard.
+    let wide = clashes(&b, 100.0);
+    assert_eq!(hard_names(&wide), [("A", "B")]);
+    assert_eq!(wide.hard, r.hard);
+    // Soft clashes join it: C is 5.5 m from B, 6 m from A.
+    assert_eq!(soft_names(&clashes(&b, 6.1)), [("A", "C"), ("B", "C")]);
+    assert!(clashes(&b, 6.0).soft.iter().all(|c| c.b != "C" || c.a != "A"), "6 m apart is not closer than 6 m");
+    assert_eq!(soft_names(&clashes(&b, 5.6)), [("B", "C")]);
+}
+
+#[test]
+fn touching_solids_are_soft_at_distance_zero_but_never_hard() {
+    let mut b = five_levels();
+    column_at(&mut b, "A", 0.0, 0.0, 1.0, "Z0", "Z2");
+    column_at(&mut b, "Face", 1.0, 0.0, 1.0, "Z0", "Z2"); // shares the face x = 0.5 with A
+    column_at(&mut b, "Edge", 1.0, 1.0, 1.0, "Z0", "Z2"); // shares the edge x = 0.5, y = 0.5 with A
+    column_at(&mut b, "Top", 0.0, 0.0, 1.0, "Z2", "Z4"); // rests on A's top face
+    let r = clashes(&b, 0.0);
+    assert!(r.hard.is_empty() && r.soft.is_empty() && r.matrix.is_empty());
+    let r = clashes(&b, 0.01);
+    assert!(r.hard.is_empty());
+    for c in &r.soft {
+        assert_eq!(c.distance, 0.0, "{c:?}");
+    }
+    // Every pair touches: Face and Edge share a face, Top meets Face along an edge and Edge at a corner.
+    assert_eq!(soft_names(&r), [("A", "Edge"), ("A", "Face"), ("A", "Top"), ("Edge", "Face"), ("Edge", "Top"), ("Face", "Top")]);
+}
+
+#[test]
+fn soft_clashes_report_the_exact_distance_and_use_a_strict_clearance() {
+    let mut b = five_levels();
+    column_at(&mut b, "D4", 0.0, 0.0, 0.2, "Z0", "Z3");
+    column_at(&mut b, "D5", 0.24, 0.0, 0.2, "Z0", "Z3"); // 0.04 off
+    column_at(&mut b, "Far", 5.0, 5.0, 0.2, "Z0", "Z3");
+    let d = |r: &clash::ClashReport| r.soft.iter().map(|c| c.distance).collect::<Vec<_>>();
+    let r = clashes(&b, 0.05);
+    assert_eq!(soft_names(&r), [("D4", "D5")]);
+    assert!((r.soft[0].distance - 0.04).abs() < 1e-14, "{:?}", d(&r));
+    assert!(clashes(&b, 0.035).soft.is_empty());
+    assert!(clashes(&b, 0.04 - 1e-9).soft.is_empty());
+    assert_eq!(clashes(&b, 0.04 + 1e-9).soft.len(), 1);
+    // A clearance that is not a positive number means none.
+    for bad in [0.0, -1.0, f64::NAN, f64::NEG_INFINITY] {
+        assert!(clashes(&b, bad).soft.is_empty(), "{bad}");
+    }
+    // Infinite clearance is not a distance either (treated as none rather than looping).
+    assert!(clashes(&b, f64::INFINITY).soft.is_empty());
+    // Diagonal gaps are Euclidean, not per axis: D5's corner (0.34, 0.1) to Dg's (0.38, 0.13) is 0.05 away.
+    column_at(&mut b, "Dg", 0.48, 0.23, 0.2, "Z0", "Z3");
+    let r = clashes(&b, 0.06);
+    let diag = r.soft.iter().find(|c| c.a == "D5" && c.b == "Dg").unwrap();
+    assert!((diag.distance - 0.05).abs() < 1e-14, "{}", diag.distance);
+    assert!(clashes(&b, 0.045).soft.iter().all(|c| c.b != "Dg"), "0.05 apart along the diagonal, though 0.04 and 0.03 per axis");
+}
+
+#[test]
+fn an_element_wholly_inside_another_clashes_by_its_whole_volume() {
+    let mut b = five_levels();
+    column_at(&mut b, "Big", 0.0, 0.0, 2.0, "Z0", "Z4");
+    column_at(&mut b, "Small", 0.1, 0.1, 0.5, "Z1", "Z3"); // no surfaces meet
+    let r = clashes(&b, 0.0);
+    assert_eq!(hard_names(&r), [("Big", "Small")]);
+    assert!((r.hard[0].volume - 0.5 * 0.5 * 2.0).abs() < 1e-14, "{}", r.hard[0].volume);
+    // An identical twin clashes by its whole volume too.
+    column_at(&mut b, "Twin", 0.1, 0.1, 0.5, "Z1", "Z3");
+    let r = clashes(&b, 0.0);
+    assert_eq!(hard_names(&r), [("Big", "Small"), ("Big", "Twin"), ("Small", "Twin")]);
+    assert!(r.hard.iter().all(|c| (c.volume - 0.5).abs() < 1e-14));
+}
+
+#[test]
+fn only_a_part_of_a_multi_part_element_inside_another_still_clashes() {
+    // A curtain wall-like mesh of two separate parts: one part inside the big column, one outside.
+    let mut b = five_levels();
+    column_at(&mut b, "Big", 0.0, 0.0, 4.0, "Z0", "Z4");
+    b.add("S", "Stair", &[("base", r("Z0")), ("top", r("Z2")), ("x", n(0.0)), ("y", n(0.0)), ("angle", n(0.0)), ("width", n(1.0)), ("riser_count", n(2.0)), ("tread", n(0.25))]);
+    let m = Model::compile(&b.0);
+    assert!(m.element(EntityId::derive("S")).is_some());
+    let r = clash::clash(&b.0, &m, 0.0);
+    // The stair (0.5 × 1 plan, up to 1 m) is inside the 4 × 4 × 4 column: its whole volume.
+    assert_eq!(hard_names(&r), [("Big", "S")]);
+    assert!((r.hard[0].volume - m.stairs[0].volume).abs() < 1e-12);
+}
+
+#[test]
+fn pipes_and_ducts_through_walls_columns_and_each_other() {
+    let a16 = 8.0 * (std::f64::consts::PI / 8.0).sin() * 0.05 * 0.05;
+    let mut b = B::new();
+    base(&mut b, &[0.1, 0.1]);
+    b.add("L2", "Level", &[("elevation", n(3.0))]);
+    wall(&mut b, "W1", [0.0, 0.0, 6.0, 0.0], 3.0);
+    wall(&mut b, "W2", [6.0, 0.0, 6.0, 4.0], 3.0);
+    b.add("O1", "Opening", &[("host", r("W1")), ("kind", t("window")), ("offset", n(4.6)), ("sill", n(0.5)), ("width", n(0.8)), ("height", n(1.5))]);
+    column_at(&mut b, "C1", 8.0, 2.0, 0.3, "L1", "L2");
+    segment_at(&mut b, "P1", [2.0, -1.0, 1.5], [2.0, 1.0, 1.5], &[0.1]); // through W1
+    segment_at(&mut b, "D1", [4.0, -1.0, 1.0], [4.0, 1.0, 1.0], &[0.4, 0.3]); // through W1
+    segment_at(&mut b, "P2", [5.0, -1.0, 1.2], [5.0, 1.0, 1.2], &[0.1]); // through the window: no clash
+    segment_at(&mut b, "D2", [1.0, 0.23, 2.5], [3.0, 0.23, 2.5], &[0.2, 0.2]); // 0.03 off W1
+    segment_at(&mut b, "P5", [1.0, 0.18, 0.5], [3.0, 0.18, 0.5], &[0.1]); // 0.03 off W1
+    segment_at(&mut b, "P3", [7.0, 2.0, 1.0], [9.0, 2.0, 1.0], &[0.1]); // through C1
+    segment_at(&mut b, "D3", [10.0, 0.0, 1.0], [10.0, 4.0, 1.0], &[0.4, 0.4]);
+    segment_at(&mut b, "P4", [9.5, 2.0, 1.0], [10.5, 2.0, 1.0], &[0.1]); // through D3
+    segment_at(&mut b, "D4", [12.0, 0.0, 1.0], [12.0, 4.0, 1.0], &[0.2, 0.2]);
+    segment_at(&mut b, "D5", [12.24, 0.0, 1.0], [12.24, 4.0, 1.0], &[0.2, 0.2]); // 0.04 off D4
+    let m = Model::compile(&b.0);
+    // Every solid is closed by indices, the precondition of the volume test.
+    for e in &m.elements {
+        assert!(e.mesh.is_closed(), "{}", e.name);
+    }
+    assert_eq!(m.elements.len(), 2 + 1 + 10);
+
+    let r = clash::clash(&b.0, &m, 0.05);
+    assert_eq!(hard_names(&r), [("C1", "P3"), ("D1", "W1"), ("D3", "P4"), ("P1", "W1")]);
+    let want = [a16 * 0.3, 0.4 * 0.3 * 0.2, a16 * 0.4, a16 * 0.2];
+    for (c, w) in r.hard.iter().zip(want) {
+        assert!((c.volume - w).abs() < 1e-14, "{}/{}: {} vs {w}", c.a, c.b, c.volume);
+    }
+    assert_eq!(soft_names(&r), [("D2", "W1"), ("D4", "D5"), ("P5", "W1")]);
+    for (c, w) in r.soft.iter().zip([0.03, 0.04, 0.03]) {
+        assert!((c.distance - w).abs() < 1e-12, "{}/{}: {}", c.a, c.b, c.distance);
+    }
+    // W1 and W2 are joined: not reported though they touch; the pipe through the window is clear.
+    assert!(!hard_names(&r).contains(&("W1", "W2")) && !soft_names(&r).contains(&("W1", "W2")));
+    assert!(!hard_names(&r).iter().chain(&soft_names(&r)).any(|(a, b)| *a == "P2" || *b == "P2"));
+    // Matrix: Segment/Wall 2, Column/Segment 1, Segment/Segment 1.
+    let count = |a: &str, b: &str| r.matrix.get(a).and_then(|row| row.get(b)).copied().unwrap_or(0);
+    assert_eq!((count("Segment", "Wall"), count("Column", "Segment"), count("Segment", "Segment")), (2, 1, 1));
+    assert_eq!(count("Wall", "Wall") + count("Column", "Wall") + count("Segment", "Column"), 0);
+    assert_eq!(r.matrix.values().flat_map(|row| row.values()).sum::<u64>(), 4);
+    // A tighter clearance drops the 0.04 pair.
+    assert_eq!(soft_names(&clashes(&b, 0.035)), [("D2", "W1"), ("P5", "W1")]);
+    // Without the clashing pipes nothing is hard, with soft clashes remaining.
+    for s in ["P1", "D1", "P3", "P4"] {
+        b.0.apply(bim_doc::Op::Delete { id: EntityId::derive(s) }).unwrap();
+    }
+    let r = clashes(&b, 0.05);
+    assert!(r.hard.is_empty() && r.matrix.is_empty());
+    assert_eq!(soft_names(&r), [("D2", "W1"), ("D4", "D5"), ("P5", "W1")]);
+}
+
+#[test]
+fn joined_walls_are_excluded_and_unjoined_ones_are_not() {
+    let mut b = B::new();
+    base(&mut b, &[0.2]);
+    wall(&mut b, "A", [0.0, 0.0, 4.0, 0.0], 3.0);
+    wall(&mut b, "B", [4.0, 0.0, 4.0, 3.0], 3.0); // L-join with A
+    wall(&mut b, "T", [2.0, 0.0, 2.0, -3.0], 3.0); // T-join: ends on A's interior
+    wall(&mut b, "X1", [10.0, -3.0, 10.0, 0.0], 3.0); // a cross junction on XT: X1, X2 T-join XT
+    wall(&mut b, "X2", [10.0, 3.0, 10.0, 0.0], 3.0);
+    wall(&mut b, "XT", [6.0, 0.0, 14.0, 0.0], 3.0);
+    for clearance in [0.0, 0.5] {
+        let r = clashes(&b, clearance);
+        assert!(r.hard.is_empty(), "{:?}", r.hard);
+        // Only pairs of walls that are not joined may be soft: A–XT, B–XT lie apart by ≥ 2 m.
+        assert!(r.soft.is_empty(), "{:?}", r.soft);
+    }
+    // Two walls crossing in their interiors are not joined: the crossing is a clash.
+    wall(&mut b, "Y1", [12.0, -1.0, 12.0, 1.0], 3.0);
+    let r = clashes(&b, 0.0);
+    // Y1 ends nowhere on XT's centreline: it crosses it (XT is 0.2 thick, Y1 0.2 thick: 0.2 × 0.2 × 3).
+    assert_eq!(hard_names(&r), [("XT", "Y1")]);
+    assert!((r.hard[0].volume - 0.2 * 0.2 * 3.0).abs() < 1e-12, "{}", r.hard[0].volume);
+    // Walls touching end to end in line (an L-join with straight continuation) are joined too.
+    wall(&mut b, "Line1", [0.0, 20.0, 5.0, 20.0], 3.0);
+    wall(&mut b, "Line2", [5.0, 20.0, 9.0, 20.0], 3.0);
+    let r = clashes(&b, 0.1);
+    assert!(!hard_names(&r).iter().chain(&soft_names(&r)).any(|(a, _)| a.starts_with("Line")));
+}
+
+#[test]
+fn walls_with_openings_clash_exactly_with_each_other_and_with_slabs() {
+    // Two crossing walls that both have openings away from the crossing (both meshes non-convex).
+    let mut b = B::new();
+    base(&mut b, &[0.1, 0.1]);
+    wall(&mut b, "Wx", [0.0, 0.0, 6.0, 0.0], 3.0);
+    wall(&mut b, "Wy", [3.0, -2.0, 3.0, 2.0], 3.0);
+    b.add("Ox", "Opening", &[("host", r("Wx")), ("offset", n(0.5)), ("sill", n(0.0)), ("width", n(1.0)), ("height", n(2.0))]);
+    b.add("Oy", "Opening", &[("host", r("Wy")), ("offset", n(0.5)), ("sill", n(1.0)), ("width", n(1.0)), ("height", n(1.0))]);
+    let m = Model::compile(&b.0);
+    assert!(m.elements.iter().all(|e| !clash::is_convex(&e.mesh)));
+    let rep = clash::clash(&b.0, &m, 0.0);
+    assert_eq!(hard_names(&rep), [("Wx", "Wy")]);
+    assert!((rep.hard[0].volume - 0.2 * 0.2 * 3.0).abs() < 1e-12, "{}", rep.hard[0].volume);
+    // An opening through the crossing region removes it from both.
+    b.0.apply(bim_doc::Op::Set { id: EntityId::derive("Ox"), key: "offset".into(), value: n(2.5) }).unwrap();
+    let rep = clashes(&b, 0.0);
+    // Ox now spans s ∈ [2.5, 3.5], z ∈ [0, 2] of Wx, which is the crossing's footprint below 2 m.
+    assert_eq!(hard_names(&rep), [("Wx", "Wy")]);
+    assert!((rep.hard[0].volume - 0.2 * 0.2 * 1.0).abs() < 1e-12, "{}", rep.hard[0].volume);
+    // A slab with an opening crossing the walls' top.
+    b.add("L2", "Level", &[("elevation", n(2.5))]);
+    b.add("S", "Slab", &[("level", r("L2")), ("boundary", nl(&[-1.0, -1.0, 7.0, -1.0, 7.0, 1.0, -1.0, 1.0])), ("thickness", n(1.0))]);
+    b.add("H", "SlabOpening", &[("host", r("S")), ("boundary", nl(&[0.0, -0.5, 1.0, -0.5, 1.0, 0.5, 0.0, 0.5]))]);
+    let m = Model::compile(&b.0);
+    for e in &m.elements {
+        assert!(e.mesh.is_closed(), "{}", e.name);
+    }
+    let rep = clash::clash(&b.0, &m, 0.0);
+    // The slab spans z ∈ [1.5, 2.5]: it crosses Wx (4.2 m of its 0.2 thickness, minus the hole, minus Ox up to 2 m)
+    // and Wy; compare against closed forms from the cut prisms' own volumes.
+    let wx = m.walls.iter().find(|w| w.name == "Wx").unwrap();
+    assert!(rep.hard.iter().any(|c| c.a == "S" && c.b == "Wx"), "{:?}", rep.hard);
+    let sx = rep.hard.iter().find(|c| c.a == "S" && c.b == "Wx").unwrap();
+    // Wx within the slab's z range 1.5..2.5, x in -1..7 (all of it), minus the hole's x 0..1 (a 1 m × 0.2 sliver
+    // of wall in the opening: wall is at y ∈ ±0.1, inside the hole's y ∈ ±0.5), minus Ox (x 2.5..3.5, z ≤ 2).
+    let expect = (6.0 - 1.0) * 0.2 * 1.0 - 1.0 * 0.2 * 0.5;
+    assert!((sx.volume - expect).abs() < 1e-12, "{} vs {expect} (wall volume {})", sx.volume, wx.volume);
+}
+
+#[test]
+fn open_surfaces_are_never_hard_but_can_be_soft() {
+    let mut doc = Document::new();
+    let sketch = |doc: &mut Document, cmds: &str| {
+        for op in bim_sketch::run(doc, &format!(r#"{{"schema": 1, "commands": [{cmds}]}}"#)).unwrap() {
+            doc.apply(op).unwrap();
+        }
+    };
+    sketch(&mut doc, r#"{"op": "rect", "shape": "box", "corner": [0, 0, 0], "u": [4, 0, 0], "v": [0, 3, 0]},
+        {"op": "pushpull", "shape": "box", "face": 1, "distance": 2.5},
+        {"op": "rect", "shape": "sheet", "corner": [-1, 1, 1], "u": [2, 0, 0], "v": [0, 1, 0]},
+        {"op": "rect", "shape": "inside", "corner": [1, 0.2, 1], "u": [1, 0, 0], "v": [0, 0.5, 0]},
+        {"op": "rect", "shape": "away", "corner": [9, 9, 9], "u": [1, 0, 0], "v": [0, 1, 0]}"#);
+    let m = Model::compile(&doc);
+    assert!(m.element(EntityId::derive("box")).unwrap().mesh.is_closed());
+    assert!(!m.element(EntityId::derive("sheet")).unwrap().mesh.is_closed());
+    let r = clash::clash(&doc, &m, 0.0);
+    assert!(r.hard.is_empty(), "{:?}", r.hard);
+    let r = clash::clash(&doc, &m, 0.1);
+    assert!(r.hard.is_empty());
+    // The sheet pokes through the box's side: distance 0. The one inside it is 0.2 m from the box's
+    // surface (the side y = 0), beyond this clearance; the far one is not within reach either.
+    assert_eq!(soft_names(&r), [("box", "sheet")]);
+    assert_eq!(r.soft[0].distance, 0.0);
+    let r = clash::clash(&doc, &m, 1.5);
+    assert!(soft_names(&r).contains(&("box", "inside")) && !soft_names(&r).iter().any(|(a, b)| *a == "away" || *b == "away"));
+    let inside = r.soft.iter().find(|c| c.b == "inside").unwrap();
+    assert!((inside.distance - 0.2).abs() < 1e-12, "{}", inside.distance);
+}
+
+#[test]
+fn an_element_is_never_paired_with_itself_and_each_pair_is_reported_once() {
+    let mut b = five_levels();
+    for k in 0..6 {
+        column_at(&mut b, &format!("K{k}"), 0.1 * k as f64, 0.0, 1.0, "Z0", "Z3");
+    }
+    let r = clashes(&b, 0.1);
+    assert_eq!(r.hard.len(), 15, "all 6 columns overlap pairwise");
+    let mut seen = std::collections::HashSet::new();
+    for c in &r.hard {
+        assert!(c.a < c.b, "{c:?}");
+        assert!(seen.insert((c.a.clone(), c.b.clone())), "{c:?} twice");
+        let (i, j): (usize, usize) = (c.a[1..].parse().unwrap(), c.b[1..].parse().unwrap());
+        let overlap = 1.0 - 0.1 * (j - i) as f64;
+        assert!((c.volume - overlap * 1.0 * 3.0).abs() < 1e-13, "{c:?}");
+    }
+    let sorted: Vec<_> = r.hard.iter().map(|c| (c.a.clone(), c.b.clone())).collect();
+    let mut expect = sorted.clone();
+    expect.sort();
+    assert_eq!(sorted, expect);
+    assert_eq!(r.matrix["Column"]["Column"], 15);
+}
+
+#[test]
+fn the_clash_of_an_empty_or_unclashing_model_is_empty() {
+    let b = B::new();
+    assert_eq!(clashes(&b, 0.5), clash::ClashReport::default());
+    let mut b = five_levels();
+    column_at(&mut b, "A", 0.0, 0.0, 1.0, "Z0", "Z3");
+    assert_eq!(clashes(&b, 0.5), clash::ClashReport::default());
+}
