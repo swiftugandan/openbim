@@ -1,0 +1,12 @@
+[package]
+name = "bim-draw"
+description = "2D drawings of the compiled building: plans, sections and elevations with layers, hatches and associative dimensions, written as SVG"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-geom = { path = "../bim-geom" }
+bim-model = { path = "../bim-model" }
