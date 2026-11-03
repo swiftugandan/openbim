@@ -1,0 +1,12 @@
+[package]
+name = "bim-mep"
+description = "MEP engine: pipe and duct network hydraulics (Darcy-Weisbach, Colebrook-White, GGA and Hardy-Cross solvers)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../../bim-doc" }
+bim-plugin = { path = "../../bim-plugin" }
+serde_json = { version = "=1.0.140", features = ["preserve_order"] }

@@ -1936,7 +1936,7 @@ fn sketch_applies_the_spec_example_atomically_and_exports_it() {
     let h = hash(&dir);
     for text in [
         r#"{"schema": 1, "commands": [{"op": "pushpull", "shape": "box", "face": 1, "distance": 1}, {"op": "pushpull", "shape": "box", "face": 99, "distance": 1}]}"#,
-        r#"{"schema": 1, "commands": [{"op": "move", "shape": "box", "faces": [1], "vector": [1, 0, 0]}]}"#,
+        r#"{"schema": 1, "commands": [{"op": "move", "shape": "box", "faces": [99], "vector": [1, 0, 0]}]}"#,
         r#"{"schema": 1, "commands": [{"op": "rect", "shape": "box", "corner": [0, 0, 0], "u": [1, 0, 0], "v": [1, 1, 0]}]}"#,
         r#"{"schema": 1"#,
         r#"{"schema": 1, "ops": []}"#,

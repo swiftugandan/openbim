@@ -20,6 +20,7 @@ bim-bcf = { path = "../standards/bcf" }
 bim-doc = { path = "../bim-doc" }
 bim-draw = { path = "../bim-draw" }
 bim-ifc = { path = "../standards/ifc" }
+bim-mep = { path = "../engines/mep" }
 bim-model = { path = "../bim-model" }
 bim-plugin = { path = "../bim-plugin" }
 bim-schema = { path = "../bim-schema" }
