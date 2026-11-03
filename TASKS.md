@@ -246,7 +246,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-plugin` with the traits, `EngineContext`, `Violation` and `Registry` of spec/plugins.md; the CLI resolves `solve --trade` and `validate --standard` only through the registry. A wasmtime host loads `wasm32-wasip2` components of the `rule-set` WIT world with no WASI filesystem/network, bounded fuel and memory. Judge builds its own sample plugin from source (in judges/), runs `bim validate --standard plugin.wasm`, and checks a trapping plugin and an infinite-loop plugin both exit 3.
   - Details: `bim-plugin` exports `EngineContext`, `EngineError`, `Violation`, `TradeEngine`, `StandardRuleSet`, `Registry` at the crate root. `Registry::new()` is empty; `register_engine(&mut self, Box<dyn TradeEngine>)` and `register_rule_set(&mut self, Box<dyn StandardRuleSet>)` key by `name()`/`id()` in separate namespaces; `engine(&self, name) -> Option<&dyn TradeEngine>`, `rule_set(&self, id) -> Option<&dyn StandardRuleSet>`. The CLI builds its registry from the shipped engines (no built-ins inside bim-plugin, which would create a dependency cycle). Host rules and exit codes: spec/plugins.md.
 
-- [ ] T4.2: architectural engine: rooms from wall topology, areas, volumes, takeoff
+- [x] T4.2: architectural engine: rooms from wall topology, areas, volumes, takeoff
   - Files: Cargo.toml, Cargo.lock, crates/engines/arch/, crates/bim-cli/
   - Opens: T4.1
   - Needs: .oracles/py/bin/python
