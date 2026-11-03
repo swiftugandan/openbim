@@ -24,5 +24,6 @@ bim-plugin = { path = "../bim-plugin" }
 bim-schema = { path = "../bim-schema" }
 bim-sketch = { path = "../bim-sketch" }
 bim-store = { path = "../bim-store" }
+bim-struct = { path = "../engines/structural", features = ["engine"] }
 bim-sync = { path = "../bim-sync" }
 serde_json = { version = "=1.0.140", features = ["preserve_order"] }
