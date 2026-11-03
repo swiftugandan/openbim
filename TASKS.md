@@ -254,7 +254,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-arch` (TradeEngine "arch"): planar arrangement of wall centrelines per level (splitting at intersections, T-junctions, dangling walls ignored), bounded faces → rooms with the area/volume rule of spec/schema.md, each room labelled by the `Space` whose `x y` lies inside it; per-layer material takeoff. Output per spec/cli.md `solve --trade arch`. Judge computes rooms independently with shapely (polygonize + per-wall inner-face offsets) on rectangular, L-shaped and non-orthogonal plans.
   - Details: Room rules (inner faces, next level, slab above, numbering, `space`) are in spec/schema.md and spec/cli.md. `rooms[].boundary` is the room's inner-face polygon (the polygon whose area is `area`), one `[x, y]` per vertex, closing vertex optional. The crate at `crates/engines/arch/` is `bim-arch`; it exports `pub struct ArchEngine` with `pub fn new() -> Self`, implementing `bim_plugin::TradeEngine` with `name()` = `arch`.
 
-- [ ] T4.3: curtain walls, stairs and ramps
+- [x] T4.3: curtain walls, stairs and ramps
   - Files: Cargo.lock, crates/engines/arch/, crates/bim-model/
   - Opens: T4.2
   - Needs: .oracles/py/bin/python

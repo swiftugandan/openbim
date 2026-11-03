@@ -134,3 +134,54 @@ fn ordering_groups_near_equal_x() {
     let got: Vec<[f64; 2]> = rs.iter().map(|r| r.centroid).collect();
     assert_eq!(got, vec![[0.5, 9.0], [1.0 + 5e-7, 0.0], [1.0 + 9e-7, 1.0], [1.0, 2.0]]);
 }
+
+#[test]
+fn stairs_and_curtain_walls_are_listed_with_their_quantities() {
+    let mut b = base();
+    let stair = |b: &mut B, name: &str, risers: f64, tread: f64| {
+        b.add(name, "Stair", &[
+            ("base", r("L0")), ("top", r("L1")), ("x", n(2.0)), ("y", n(1.0)), ("angle", n(0.5)),
+            ("width", n(1.2)), ("riser_count", n(risers)), ("tread", n(tread)),
+        ]);
+    };
+    let wall = |b: &mut B, name: &str, spacing: f64| {
+        b.add(name, "CurtainWall", &[
+            ("level", r("L0")), ("x1", n(1.0)), ("y1", n(2.0)), ("x2", n(5.0)), ("y2", n(5.0)), ("height", n(3.0)),
+            ("u_spacing", n(spacing)), ("v_spacing", n(1.25)), ("mullion_width", n(0.05)), ("mullion_depth", n(0.15)),
+            ("panel_thickness", n(0.024)),
+        ]);
+    };
+    stair(&mut b, "st-b", 18.0, 0.28);
+    stair(&mut b, "st-a", 7.0, 0.3);
+    stair(&mut b, "st-bad", 2.5, 0.3); // not a whole number of risers: not listed
+    wall(&mut b, "cw-b", 1.5);
+    wall(&mut b, "cw-a", 5.0); // one bay along, three up
+    wall(&mut b, "cw-bad", 0.0); // no spacing: not listed
+    b.add("ramp", "Ramp", &[
+        ("base", r("L0")), ("top", r("L1")), ("x", n(0.0)), ("y", n(0.0)), ("angle", n(0.0)),
+        ("width", n(1.0)), ("length", n(10.0)),
+    ]);
+    let out = b.solve();
+    let keys: Vec<&String> = out.as_object().unwrap().keys().collect();
+    assert_eq!(keys, ["rooms", "walls", "slabs", "stairs", "curtain_walls"]);
+
+    let stairs = out["stairs"].as_array().unwrap();
+    assert_eq!(stairs.iter().map(|s| s["id"].as_str().unwrap()).collect::<Vec<_>>(), ["st-a", "st-b"]);
+    assert_eq!(stairs[0].as_object().unwrap().keys().collect::<Vec<_>>(), ["id", "riser", "tread", "risers"]);
+    assert!(close(f(&stairs[0]["riser"]), 3.0 / 7.0) && close(f(&stairs[0]["tread"]), 0.3));
+    assert_eq!(stairs[0]["risers"].as_u64(), Some(7));
+    assert!(close(f(&stairs[1]["riser"]), 3.0 / 18.0) && close(f(&stairs[1]["tread"]), 0.28));
+    assert_eq!(stairs[1]["risers"].as_u64(), Some(18));
+
+    let walls = out["curtain_walls"].as_array().unwrap();
+    assert_eq!(walls.iter().map(|c| c["id"].as_str().unwrap()).collect::<Vec<_>>(), ["cw-a", "cw-b"]);
+    assert_eq!(walls[0].as_object().unwrap().keys().collect::<Vec<_>>(), ["id", "panels", "mullion_length"]);
+    // 4 × 3 bays along a 5 m wall that is 3 m high: (4 + 1)·3 + (3 + 1)·5.
+    assert_eq!(walls[1]["panels"].as_u64(), Some(12));
+    assert!(close(f(&walls[1]["mullion_length"]), 35.0));
+    // 1 × 3 bays: (1 + 1)·3 + (3 + 1)·5.
+    assert_eq!(walls[0]["panels"].as_u64(), Some(3));
+    assert!(close(f(&walls[0]["mullion_length"]), 26.0));
+    assert!(out["rooms"].as_array().unwrap().is_empty() && out.get("ramps").is_none());
+    assert_eq!(b.solve(), out, "deterministic");
+}
