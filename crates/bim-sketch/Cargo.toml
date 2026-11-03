@@ -1,0 +1,11 @@
+[package]
+name = "bim-sketch"
+description = "Direct modelling: Shapes, drawing with face finding, push/pull and erase (spec/sketch.md)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-geom = { path = "../bim-geom" }

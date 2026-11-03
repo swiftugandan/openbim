@@ -15,7 +15,8 @@
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade arch --json` | prints the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); other trades exit 2 (see the private `geometry` module) |
-//! | `bim export <dir> --format gltf --out <file>` | writes the glTF 2.0 model: one closed mesh node per element with `extras.id`, y-up; other formats exit 2 |
+//! | `bim export <dir> --format gltf --out <file>` | writes the glTF 2.0 model: one closed mesh node per element (building elements and direct-modelling Shapes; an open-surface Shape's node is open) with `extras.id`, y-up; other formats exit 2 |
+//! | `bim sketch <dir> <file.json>` | applies the file's direct-modelling commands (spec/sketch.md) through `bim-sketch`, all or none; an invalid command exits 2 |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -66,7 +67,8 @@ pub const USAGE: &str = "usage:
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
   bim solve <dir> --trade arch --json
-  bim export <dir> --format gltf --out <file>";
+  bim export <dir> --format gltf --out <file>
+  bim sketch <dir> <file.json>";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +142,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("sync") => commands::sync(operands, out),
         Some("solve") => geometry::solve(operands, out),
         Some("export") => geometry::export(operands, out),
+        Some("sketch") => commands::sketch(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
     }
 }
@@ -220,7 +223,7 @@ mod tests {
 
     #[test]
     fn usage_errors_exit_2_with_usage_on_stderr_only() {
-        let cases: [&[&str]; 37] = [
+        let cases: [&[&str]; 40] = [
             &[],
             &["frobnicate"],
             &["--help"],
@@ -258,6 +261,9 @@ mod tests {
             &["sync", "serve", "--port", "1"],
             &["sync", "serve", "d", "--port", "1", "--port", "2"],
             &["sync", "d", "--port", "1"],
+            &["sketch"],
+            &["sketch", "d"],
+            &["sketch", "d", "f.json", "extra"],
         ];
         for args in cases {
             let (code, out, err) = run_str(args);
