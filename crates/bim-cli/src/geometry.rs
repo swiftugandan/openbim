@@ -5,6 +5,9 @@
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
 //!   [`bim_model::gltf`]: one mesh node per element with `extras.id`.
 //! * `bim export <dir> --format ifc --out <file>` writes the IFC4 file of [`bim_ifc::export`].
+//! * `bim export <dir> --format svg --view <view> --out <file>` writes the drawing of
+//!   [`bim_draw`] (plan, section or elevation, spec/cli.md); an unknown or unparseable view is a
+//!   usage error (exit 2), as is `--view` with another format or svg without it.
 //!   Any other format is a usage error (exit 2). The file is written to a temporary file next to it and renamed into place.
 
 use std::ffi::OsString;
@@ -60,17 +63,25 @@ impl Parsed<'_> {
     }
 }
 
-/// `bim export <dir> --format gltf|ifc --out <file>`.
+/// `bim export <dir> --format gltf|ifc --out <file>` and
+/// `bim export <dir> --format svg --view <view> --out <file>`.
 pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
-    let form = "export <dir> --format <format> --out <file>";
-    let p = parse(args, &["--format", "--out"], form)?;
+    let form = "export <dir> --format <format> [--view <view>] --out <file>";
+    let p = parse(args, &["--format", "--out", "--view"], form)?;
     if p.json {
         return Err(CliError::Usage(format!("`bim {form}`: `--json` is not an option of export")));
     }
     let format = p.value("--format").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--format` is required")))?;
     let file = p.value("--out").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--out` is required")))?;
-    if format != "gltf" && format != "ifc" {
-        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc)", format.to_string_lossy())));
+    if format != "gltf" && format != "ifc" && format != "svg" {
+        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc, svg)", format.to_string_lossy())));
+    }
+    let view = p.value("--view");
+    if format == "svg" && view.is_none() {
+        return Err(CliError::Usage(format!("`bim {form}`: `--view` is required for a drawing format")));
+    }
+    if format != "svg" && view.is_some() {
+        return Err(CliError::Usage(format!("`bim {form}`: `--view` applies to drawing formats only")));
     }
     let project = Project::open(Path::new(p.positional[0]))?;
     let text = if format == "ifc" {
@@ -80,6 +91,11 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
             return Err(CliError::Input(format!("{}: the model has values IFC cannot represent", Path::new(file).display())));
         }
         text
+    } else if let Some(view) = view {
+        let view = view.to_str().ok_or_else(|| CliError::Usage(format!("view `{}` is not valid UTF-8", view.to_string_lossy())))?;
+        let view = bim_draw::View::parse(&project.doc, view).map_err(|e| CliError::Usage(e.to_string()))?;
+        let drawing = bim_draw::draw(&project.doc, &Model::compile(&project.doc), &view);
+        bim_draw::svg::to_svg(&drawing)
     } else {
         bim_model::gltf::to_gltf(&Model::compile(&project.doc).elements)
     };
@@ -165,6 +181,8 @@ mod tests {
             &["export", "d", "--format", "gltf"],
             &["export", "d", "--out", "f"],
             &["export", "d", "--format", "obj", "--out", "f"],
+            &["export", "d", "--format", "svg", "--out", "f"],
+            &["export", "d", "--format", "gltf", "--view", "elevation:s", "--out", "f"],
         ] {
             let (code, out, err) = run(args);
             assert_eq!(code, 2, "{args:?}");
