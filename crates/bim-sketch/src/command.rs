@@ -12,7 +12,7 @@ pub struct Command {
     pub op: Op,
 }
 
-/// The operations of this task; the others of spec/sketch.md are rejected as unimplemented.
+/// The sketch operations of spec/sketch.md.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Op {
     Line { from: V3, to: V3 },
@@ -21,6 +21,29 @@ pub enum Op {
     Arc { centre: V3, start: V3, normal: V3, angle: f64, segments: usize },
     PushPull { face: u64, distance: f64, new: bool },
     Erase { edges: Vec<(usize, usize)> },
+    Offset { face: u64, distance: f64 },
+    FollowMe { face: u64, path: Vec<V3> },
+    /// `move`, `rotate` or `scale` of a selection, optionally as `array` copies.
+    Transform { selection: Selection, xf: Xf, copy: bool, array: u64 },
+    /// `paint`: the Product (by the id or name the file gives) or `None` to clear.
+    Paint { faces: Vec<u64>, product: Option<String> },
+    MakeComponent { definition: String, instance: String, name: String },
+}
+
+/// What a `move`, `rotate` or `scale` acts on: vertex indices, edges (index pairs) and face ids.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Selection {
+    pub vertices: Vec<usize>,
+    pub edges: Vec<(usize, usize)>,
+    pub faces: Vec<u64>,
+}
+
+/// The transformation of a `move`, `rotate` or `scale`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Xf {
+    Move { vector: V3 },
+    Rotate { centre: V3, axis: V3, angle: f64 },
+    Scale { origin: V3, factors: V3 },
 }
 
 impl Op {
@@ -37,12 +60,16 @@ impl Op {
             Op::Arc { .. } => "arc",
             Op::PushPull { .. } => "pushpull",
             Op::Erase { .. } => "erase",
+            Op::Offset { .. } => "offset",
+            Op::FollowMe { .. } => "followme",
+            Op::Transform { xf: Xf::Move { .. }, .. } => "move",
+            Op::Transform { xf: Xf::Rotate { .. }, .. } => "rotate",
+            Op::Transform { xf: Xf::Scale { .. }, .. } => "scale",
+            Op::Paint { .. } => "paint",
+            Op::MakeComponent { .. } => "make_component",
         }
     }
 }
-
-/// Ops of spec/sketch.md that later tasks implement; a file using one is invalid for now.
-const LATER_OPS: [&str; 7] = ["offset", "followme", "move", "rotate", "scale", "paint", "make_component"];
 
 /// The members of one JSON object, taken one by one; [`Fields::finish`] rejects leftovers.
 struct Fields<'a> {
@@ -97,6 +124,38 @@ impl<'a> Fields<'a> {
         }
     }
 
+    fn integers(&mut self, name: &str) -> Result<Vec<u64>, String> {
+        match self.take(name) {
+            None => Ok(Vec::new()),
+            Some(Json::Array(items)) => items.iter().map(|v| index(v).ok_or_else(|| format!("{}: `{name}` entries must be non-negative integers, found {v:?}", self.at))).collect(),
+            Some(other) => Err(format!("{}: `{name}` must be an array, found {}", self.at, other.type_name())),
+        }
+    }
+
+    fn pairs(&mut self, name: &str) -> Result<Vec<(usize, usize)>, String> {
+        match self.take(name) {
+            None => Ok(Vec::new()),
+            Some(Json::Array(pairs)) => pairs
+                .iter()
+                .map(|pair| match pair {
+                    Json::Array(ab) if ab.len() == 2 => match (index(&ab[0]), index(&ab[1])) {
+                        (Some(a), Some(b)) => Ok((a as usize, b as usize)),
+                        _ => Err(format!("{}: `{name}` entries must be vertex index pairs, found {pair:?}", self.at)),
+                    },
+                    other => Err(format!("{}: `{name}` entries must be index pairs, found {other:?}", self.at)),
+                })
+                .collect(),
+            Some(other) => Err(format!("{}: `{name}` must be an array, found {}", self.at, other.type_name())),
+        }
+    }
+
+    fn points(&mut self, name: &str) -> Result<Vec<V3>, String> {
+        match self.require(name)? {
+            Json::Array(items) => items.iter().map(|v| point(v).ok_or_else(|| format!("{}: `{name}` entries must be three finite numbers", self.at))).collect(),
+            other => Err(format!("{}: `{name}` must be an array of points, found {}", self.at, other.type_name())),
+        }
+    }
+
     fn bool_or(&mut self, name: &str, default: bool) -> Result<bool, String> {
         match self.take(name) {
             None => Ok(default),
@@ -110,6 +169,13 @@ impl<'a> Fields<'a> {
             Some((k, _)) => Err(format!("{}: unknown field `{k}`", self.at)),
             None => Ok(()),
         }
+    }
+}
+
+fn index(v: &Json) -> Option<u64> {
+    match v {
+        Json::Num(x) if x.fract() == 0.0 && *x >= 0.0 && *x < 1e15 => Some(*x as u64),
+        _ => None,
     }
 }
 
@@ -163,28 +229,53 @@ pub fn parse(text: &str) -> Result<Vec<Command>, String> {
             },
             "pushpull" => Op::PushPull { face: f.integer("face", None)?, distance: f.number("distance")?, new: f.bool_or("new", false)? },
             "erase" => {
-                let edges = match f.require("edges")? {
-                    Json::Array(pairs) => pairs
-                        .iter()
-                        .map(|pair| match pair {
-                            Json::Array(ab) if ab.len() == 2 => {
-                                let ix = |v: &Json| match v {
-                                    Json::Num(x) if x.fract() == 0.0 && *x >= 0.0 && *x < 1e15 => Ok(*x as usize),
-                                    other => Err(format!("{at}: `edges` entries must be vertex index pairs, found {other:?}")),
-                                };
-                                Ok((ix(&ab[0])?, ix(&ab[1])?))
-                            }
-                            other => Err(format!("{at}: `edges` entries must be index pairs, found {other:?}")),
-                        })
-                        .collect::<Result<Vec<_>, _>>()?,
-                    other => return Err(format!("{at}: `edges` must be an array, found {}", other.type_name())),
-                };
+                if f.members.iter().all(|(k, _)| *k != "edges") {
+                    return Err(format!("{at}: missing field `edges`"));
+                }
+                let edges = f.pairs("edges")?;
                 if edges.is_empty() {
                     return Err(format!("{at}: `edges` must name at least one edge"));
                 }
                 Op::Erase { edges }
             }
-            other if LATER_OPS.contains(&other) => return Err(format!("{at}: op `{other}` is not implemented yet")),
+            "offset" => Op::Offset { face: f.integer("face", None)?, distance: f.number("distance")? },
+            "followme" => Op::FollowMe { face: f.integer("face", None)?, path: f.points("path")? },
+            "move" | "rotate" | "scale" => {
+                let selection = Selection { vertices: f.integers("vertices")?.into_iter().map(|v| v as usize).collect(), edges: f.pairs("edges")?, faces: f.integers("faces")? };
+                if selection.vertices.is_empty() && selection.edges.is_empty() && selection.faces.is_empty() {
+                    return Err(format!("{at}: `{name}` needs a selection (`vertices`, `edges` or `faces`)"));
+                }
+                let xf = match name.as_str() {
+                    "move" => Xf::Move { vector: f.point("vector")? },
+                    "rotate" => Xf::Rotate { centre: f.point("centre")?, axis: f.point("axis")?, angle: f.number("angle")? },
+                    _ => Xf::Scale { origin: f.point("origin")?, factors: f.point("factors")? },
+                };
+                let copy = f.bool_or("copy", false)?;
+                let array = f.integer("array", Some(1))?;
+                if array < 1 {
+                    return Err(format!("{at}: `array` must be at least 1"));
+                }
+                if array > 1 && !copy {
+                    return Err(format!("{at}: `array` needs `copy: true`"));
+                }
+                if array > 10_000 {
+                    return Err(format!("{at}: `array` must be at most 10000"));
+                }
+                Op::Transform { selection, xf, copy, array }
+            }
+            "paint" => {
+                let faces = f.integers("faces")?;
+                if faces.is_empty() {
+                    return Err(format!("{at}: `faces` must name at least one face"));
+                }
+                let product = match f.require("product")? {
+                    Json::Null => None,
+                    Json::Str(s) if !s.is_empty() => Some(s.clone()),
+                    other => return Err(format!("{at}: `product` must be a Product id or null, found {other:?}")),
+                };
+                Op::Paint { faces, product }
+            }
+            "make_component" => Op::MakeComponent { definition: f.string("definition")?, instance: f.string("instance")?, name: f.string("name")? },
             other => return Err(format!("{at}: unknown op `{other}`")),
         };
         f.finish()?;
@@ -217,7 +308,13 @@ mod tests {
             (r#"{"schema": 2, "commands": []}"#, "schema"),
             (r#"{"schema": 1, "commands": [ {"op": "rect""#, "invalid JSON"),
             (r#"{"schema": 1, "commands": [{"op": "extrude-everything", "shape": "b"}]}"#, "unknown op"),
-            (r#"{"schema": 1, "commands": [{"op": "offset", "shape": "b", "face": 1, "distance": 1}]}"#, "not implemented"),
+            (r#"{"schema": 1, "commands": [{"op": "offset", "shape": "b", "face": 1}]}"#, "missing field `distance`"),
+            (r#"{"schema": 1, "commands": [{"op": "move", "shape": "b", "vector": [1, 0, 0]}]}"#, "selection"),
+            (r#"{"schema": 1, "commands": [{"op": "move", "shape": "b", "faces": [1], "vector": [1, 0, 0], "array": 3}]}"#, "`copy: true`"),
+            (r#"{"schema": 1, "commands": [{"op": "rotate", "shape": "b", "faces": [1], "centre": [0, 0, 0], "angle": 1}]}"#, "`axis`"),
+            (r#"{"schema": 1, "commands": [{"op": "paint", "shape": "b", "faces": [1]}]}"#, "`product`"),
+            (r#"{"schema": 1, "commands": [{"op": "followme", "shape": "b", "face": 1, "path": [[0, 0]]}]}"#, "`path`"),
+            (r#"{"schema": 1, "commands": [{"op": "make_component", "shape": "b", "definition": "d", "name": "n"}]}"#, "`instance`"),
             (r#"{"schema": 1, "commands": [{"op": "rect", "shape": "b", "corner": [0, 0], "u": [1, 0, 0], "v": [0, 1, 0]}]}"#, "`corner`"),
             (r#"{"schema": 1, "commands": [{"op": "pushpull", "shape": "b", "face": 1.5, "distance": 1}]}"#, "`face`"),
             (r#"{"schema": 1, "commands": [{"op": "pushpull", "shape": "b", "face": 1, "distance": 1, "extra": 1}]}"#, "unknown field"),

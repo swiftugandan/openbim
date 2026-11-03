@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bim_doc::{Entity, Value};
+use bim_doc::{Entity, EntityId, Value};
 
 use crate::geom::{self, dist, newell, on_open_segment, param_on_line, unit, Plane, EPS, V3};
 
@@ -79,13 +79,18 @@ impl Face {
     }
 }
 
-/// A Shape's geometry (its local frame; `transform` and the other optional props are not read).
+/// A Shape's geometry (its local frame; `transform` and the other optional placement props are
+/// not read) and its paint.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Shape {
     pub vertices: Vec<V3>,
     pub faces: Vec<Face>,
     /// Every edge (face edges and loose ones), as `(lower, higher)` index pairs, in creation order.
     pub edges: Vec<(usize, usize)>,
+    /// `face_products` keyed by face id: `None` while the Shape has no such prop, else the Product
+    /// painted on each face that has one. Paint follows the face id, so a face that keeps its id
+    /// keeps its paint; [`Shape::prune_products`] drops the entries of faces that are gone.
+    pub products: Option<BTreeMap<u64, EntityId>>,
 }
 
 fn key(a: usize, b: usize) -> (usize, usize) {
@@ -167,7 +172,22 @@ impl Shape {
         if loose.len() % 2 != 0 {
             return Err("edges: an odd number of indices is not a list of pairs".to_string());
         }
-        let mut shape = Shape { vertices, faces, edges: Vec::new() };
+        // `face_products` is read leniently (it only colours faces): a Ref paints the face at the
+        // same position, anything else leaves it unpainted.
+        let products = match e.props.get("face_products") {
+            Some(Value::List(items)) => Some(
+                faces
+                    .iter()
+                    .zip(items)
+                    .filter_map(|(f, v): (&Face, &Value)| match v {
+                        Value::Ref(p) => Some((f.id, *p)),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        };
+        let mut shape = Shape { vertices, faces, edges: Vec::new(), products };
         for f in 0..shape.faces.len() {
             for (a, b) in shape.faces[f].directed_edges() {
                 shape.add_edge(a, b);
@@ -184,7 +204,8 @@ impl Shape {
         Ok(shape)
     }
 
-    /// The geometry props: `vertices`, `faces`, `face_ids` and `edges` (the loose ones), in that order.
+    /// The geometry props: `vertices`, `faces`, `face_ids` and `edges` (the loose ones), in that
+    /// order, then `face_products` (one entry per face: a Ref or `""`) once the Shape has paint.
     pub fn props(&self) -> Vec<(String, Value)> {
         let clean = |x: f64| Value::Num(if x == 0.0 { 0.0 } else { x });
         let vertices = Value::List(self.vertices.iter().flat_map(|v| v.iter().map(|&x| clean(x))).collect());
@@ -203,7 +224,39 @@ impl Shape {
                 .flat_map(|&(a, b)| [Value::Num(a as f64), Value::Num(b as f64)])
                 .collect(),
         );
-        vec![("vertices".into(), vertices), ("faces".into(), faces), ("face_ids".into(), ids), ("edges".into(), loose)]
+        let mut out = vec![("vertices".into(), vertices), ("faces".into(), faces), ("face_ids".into(), ids), ("edges".into(), loose)];
+        if let Some(products) = &self.products {
+            let list = self.faces.iter().map(|f| products.get(&f.id).map_or_else(|| Value::Text(String::new()), |p| Value::Ref(*p))).collect();
+            out.push(("face_products".into(), Value::List(list)));
+        }
+        out
+    }
+
+    /// The Product painted on face `id`, if any.
+    pub fn product(&self, id: u64) -> Option<EntityId> {
+        self.products.as_ref().and_then(|p| p.get(&id).copied())
+    }
+
+    /// Paints face `id` with `product` (`None` clears it).
+    pub fn set_product(&mut self, id: u64, product: Option<EntityId>) {
+        let map = self.products.get_or_insert_with(BTreeMap::new);
+        match product {
+            Some(p) => {
+                map.insert(id, p);
+            }
+            None => {
+                map.remove(&id);
+            }
+        }
+    }
+
+    /// Drops the paint of faces the Shape no longer has, so a later face given the same id does
+    /// not inherit it.
+    pub fn prune_products(&mut self) {
+        let ids: BTreeSet<u64> = self.faces.iter().map(|f| f.id).collect();
+        if let Some(p) = &mut self.products {
+            p.retain(|id, _| ids.contains(id));
+        }
     }
 
     // ------------------------------------------------------------------ queries
@@ -545,7 +598,7 @@ impl Shape {
             if !orientable || flip.len() != members.len() {
                 continue;
             }
-            let mut part = Shape { vertices: self.vertices.clone(), faces: members.iter().map(|&f| self.faces[f].clone()).collect(), edges: Vec::new() };
+            let mut part = Shape { vertices: self.vertices.clone(), faces: members.iter().map(|&f| self.faces[f].clone()).collect(), edges: Vec::new(), products: None };
             for (k, &f) in members.iter().enumerate() {
                 if flip[&f] {
                     part.faces[k].loops.iter_mut().for_each(|lp| lp.reverse());
@@ -665,6 +718,7 @@ mod tests {
             vertices: vec![[0., 0., 0.], [4., 0., 0.], [4., 3., 0.], [0., 3., 0.], [2., 0., 0.], [2., 3., 0.], [2., 3., 4e-10]],
             faces: vec![Face { id: 1, loops: vec![vec![0, 1, 2, 3]] }],
             edges: vec![(0, 1), (1, 2), (2, 3), (0, 3), (4, 6)],
+            products: None,
         };
         s.normalize();
         assert_eq!(s.faces[0].loops[0], vec![0, 4, 1, 2, 5, 3], "T-junctions split in the loop");
@@ -676,6 +730,7 @@ mod tests {
             vertices: vec![[0., 0., 0.], [1., 0., 0.], [2., 0., 0.]],
             faces: vec![Face { id: 1, loops: vec![vec![0, 1, 2]] }],
             edges: vec![],
+            products: None,
         };
         t.normalize();
         assert!(t.faces.is_empty());

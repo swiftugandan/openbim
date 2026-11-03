@@ -196,7 +196,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: spec/sketch.md for the `Shape` kind and its rules (planar faces, solid vs surface, stable face ids) and the commands `line`, `rect`, `circle`, `arc`, `pushpull` (including `new` and punch-through) and `erase`, applied atomically by `bim sketch <dir> <file.json>`. Shapes compile into the geometry model: glTF export has one node per Shape (its triangulated faces, `extras.id` = the Shape id), and a closed Shape's solid volume is exact.
   - Details: `bim-sketch` exports `run(doc: &bim_doc::Document, json: &str) -> Result<Vec<bim_doc::Op>, SketchError>` returning the ops that apply the whole command file (the CLI applies them atomically; nothing on error). After `rect` 4 × 3 and `pushpull` 2.5 the Shape is a closed solid of 30 m³ with 6 faces. Face finding works in any plane, not only z = 0. Within 1e-9 m points are equal.
 
-- [ ] T2.11: direct modelling II: offset, follow-me, move/rotate/scale with copies, paint, components
+- [x] T2.11: direct modelling II: offset, follow-me, move/rotate/scale with copies, paint, components
   - Files: Cargo.lock, crates/bim-sketch/, crates/bim-model/
   - Opens: T2.10
   - Verification: bash judges/T2.11.sh
