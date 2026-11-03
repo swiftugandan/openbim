@@ -12,11 +12,13 @@
 //! | `Column` | `IfcColumn` (`Pset_ColumnCommon`, its `Material` as `IfcMaterial`) | the column prism | its `base` level |
 //! | `Beam` | `IfcBeam` (`Pset_BeamCommon`, its `Material`) | the beam prism | its `level` |
 //! | `Space` | `IfcSpace` (`Pset_SpaceCommon`), placed at its `x y` | none (room geometry is derived) | aggregated into its `level` |
+//! | placed, closed `Shape` (spec/sketch.md) | an occurrence of its `classification` class (`IfcBuildingElementProxy` when absent or not an IFC4 element class; the requested class then goes into `ObjectType`) | an `IfcFacetedBrep` with one `IfcFace` per Shape face (holes as inner bounds), vertices = the Shape's under its `transform`, placed at the world origin | its `level` |
 //!
 //! **Geometry.** Bodies come from the bim-model meshes, so IFC volumes equal `bim solve` volumes: a
 //! mesh that is a vertical prism over a convex plan polygon (walls, columns, beams) becomes an
-//! `IfcExtrudedAreaSolid` of that polygon; any other mesh (e.g. a non-convex slab or a slab with
-//! holes) an `IfcFacetedBrep` of its triangles. Walls carry their unopened solid and the openings
+//! `IfcExtrudedAreaSolid` of that polygon, and so does a slab whose solid is its whole `boundary`
+//! extruded (convex or not); any other mesh (e.g. a slab with holes) an `IfcFacetedBrep` of its
+//! triangles. Walls carry their unopened solid and the openings
 //! are `IfcOpeningElement`s, as IFC intends; since bim-model clips opening boxes to the wall, the
 //! wall minus its opening boxes is exactly bim-model's wall solid. Opening boxes are extended a
 //! little beyond the wall wherever they reach or cross a wall face, so no subtraction has coplanar
@@ -163,10 +165,12 @@ impl Frame {
 
 /// A body in local coordinates.
 enum Body {
-    /// Counter-clockwise convex polygon extruded from `z0` up by `depth`.
+    /// Counter-clockwise polygon (convex, or a slab's boundary) extruded from `z0` up by `depth`.
     Prism { poly: Vec<[f64; 2]>, z0: f64, depth: f64 },
     /// A closed triangle mesh.
     Brep { points: Vec<[f64; 3]>, triangles: Vec<[u32; 3]> },
+    /// A closed polyhedron: faces as loops of point indices (outer loop first, then holes).
+    Faces { points: Vec<[f64; 3]>, faces: Vec<Vec<Vec<usize>>> },
 }
 
 /// The body of `mesh` in `frame`: an extrusion when the mesh is a vertical prism over a convex
@@ -190,6 +194,38 @@ fn body_of(mesh: &Mesh, frame: &Frame) -> Option<Body> {
         }
     }
     Some(Body::Brep { points, triangles: mesh.triangles.clone() })
+}
+
+/// A slab whose solid is its whole `boundary` polygon extruded (no SlabOpenings cut, any simple
+/// polygon, convex or not) as that extrusion in `frame`, so the IFC keeps the slab parametric.
+fn slab_prism(doc: &Document, e: &Entity, mesh: &Mesh, frame: &Frame) -> Option<Body> {
+    let flat: Vec<f64> = match prop(doc, e, "boundary") {
+        Some(Value::List(l)) => l.iter().map(|v| if let Value::Num(x) = v { *x } else { f64::NAN }).collect(),
+        _ => return None,
+    };
+    if flat.len() < 6 || flat.len() % 2 != 0 || flat.iter().any(|x| !x.is_finite()) {
+        return None;
+    }
+    let mut poly: Vec<[f64; 2]> = flat.chunks(2).map(|c| [c[0] - frame.o[0], c[1] - frame.o[1]]).collect();
+    if frame.u != [1.0, 0.0] {
+        return None;
+    }
+    if ring_area(&poly) < 0.0 {
+        poly.reverse();
+    }
+    let zs: Vec<f64> = mesh.positions.iter().map(|p| p.z - frame.o[2]).collect();
+    let zlo = zs.iter().copied().fold(f64::INFINITY, f64::min);
+    let zhi = zs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    let depth = zhi - zlo;
+    let tol = PRISM_TOL * (1.0 + zlo.abs().max(zhi.abs()));
+    if !(depth > 0.0) || zs.iter().any(|z| (z - zlo).abs() > tol && (z - zhi).abs() > tol) {
+        return None;
+    }
+    let volume = mesh.volume();
+    if (ring_area(&poly) * depth - volume).abs() > PRISM_TOL * volume.abs().max(1.0) * 10.0 {
+        return None;
+    }
+    Some(Body::Prism { poly, z0: zlo, depth })
 }
 
 // ------------------------------------------------------------------ exporter
@@ -424,6 +460,7 @@ impl<'a> Exporter<'a> {
                     }
                     self.pset(e.id, ifc, pset, props);
                 }
+                "Shape" => self.shape_element(e),
                 _ => {}
             }
         }
@@ -536,6 +573,32 @@ impl<'a> Exporter<'a> {
                 let shell = self.add("IfcClosedShell", &[("CfsFaces", Param::refs(faces))]);
                 (self.add("IfcFacetedBrep", &[("Outer", Param::Ref(shell))]), "Brep")
             }
+            Body::Faces { points, faces } => {
+                let mut ids: Vec<Option<u64>> = vec![None; points.len()];
+                let mut faces_out = Vec::with_capacity(faces.len());
+                for face in &faces {
+                    let mut bounds = Vec::with_capacity(face.len());
+                    for (k, lp) in face.iter().enumerate() {
+                        let pts: Vec<u64> = lp
+                            .iter()
+                            .map(|&i| match ids[i] {
+                                Some(id) => id,
+                                None => {
+                                    let id = self.point3(points[i]);
+                                    ids[i] = Some(id);
+                                    id
+                                }
+                            })
+                            .collect();
+                        let poly = self.add("IfcPolyLoop", &[("Polygon", Param::refs(pts))]);
+                        let class = if k == 0 { "IfcFaceOuterBound" } else { "IfcFaceBound" };
+                        bounds.push(self.add(class, &[("Bound", Param::Ref(poly)), ("Orientation", Param::boolean(true))]));
+                    }
+                    faces_out.push(self.add("IfcFace", &[("Bounds", Param::refs(bounds))]));
+                }
+                let shell = self.add("IfcClosedShell", &[("CfsFaces", Param::refs(faces_out))]);
+                (self.add("IfcFacetedBrep", &[("Outer", Param::Ref(shell))]), "Brep")
+            }
         };
         let ctx = self.body_ctx;
         let rep = self.add(
@@ -554,7 +617,14 @@ impl<'a> Exporter<'a> {
     fn simple_element(&mut self, e: &Entity, class: &str, level: EntityId, mesh: &Mesh) -> Option<u64> {
         let (st_pl, elev) = self.storeys.get(&level).map(|s| (s.placement, s.elevation))?;
         let frame = Frame { o: [0.0, 0.0, elev], u: [1.0, 0.0] };
-        let body = body_of(mesh, &frame)?;
+        let body = match class {
+            "IfcSlab" => slab_prism(self.doc, e, mesh, &frame),
+            _ => None,
+        };
+        let body = match body {
+            Some(b) => b,
+            None => body_of(mesh, &frame)?,
+        };
         let pl = self.placement(Some(st_pl), [0.0; 3], [1.0, 0.0]);
         let shape = self.shape(body);
         let ifc = self.add_rooted(
@@ -570,6 +640,74 @@ impl<'a> Exporter<'a> {
         );
         self.storeys.get_mut(&level)?.contained.push(ifc);
         Some(ifc)
+    }
+
+    /// A placed, closed `Shape` (spec/sketch.md): an occurrence of its `classification` class
+    /// (`IfcBuildingElementProxy` when absent or not an IFC4 element class) whose body is an
+    /// `IfcFacetedBrep` with one `IfcFace` per Shape face, its vertices the Shape's under its
+    /// `transform` (world coordinates: the element is placed at the world origin, relative to its
+    /// level's storey, in which it is contained). Open or malformed Shapes are not exported here.
+    fn shape_element(&mut self, e: &Entity) {
+        let doc = self.doc;
+        let Ok(shape) = bim_sketch::Shape::from_entity(e) else { return };
+        if !shape.is_closed() {
+            return;
+        }
+        let m: [f64; 16] = match e.props.get("transform") {
+            None => [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+            Some(Value::List(l)) if l.len() == 16 => {
+                let mut m = [0.0; 16];
+                for (k, v) in l.iter().enumerate() {
+                    match v {
+                        Value::Num(x) if x.is_finite() => m[k] = *x,
+                        _ => return,
+                    }
+                }
+                m
+            }
+            Some(_) => return,
+        };
+        let points: Vec<[f64; 3]> = shape
+            .vertices
+            .iter()
+            .map(|p| {
+                let w = m[3] * p[0] + m[7] * p[1] + m[11] * p[2] + m[15];
+                let w = if w != 0.0 && w.is_finite() { w } else { 1.0 };
+                [
+                    (m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12]) / w,
+                    (m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13]) / w,
+                    (m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14]) / w,
+                ]
+            })
+            .collect();
+        let det = m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
+        let faces: Vec<Vec<Vec<usize>>> = shape
+            .faces
+            .iter()
+            .map(|f| f.loops.iter().map(|lp| if det < 0.0 { lp.iter().rev().copied().collect() } else { lp.clone() }).collect())
+            .collect();
+        let requested = text(doc, e, "classification");
+        let class = requested
+            .and_then(|c| Schema::Ifc4.entity(c))
+            .filter(|d| !d.is_abstract && Schema::Ifc4.is_subtype_of(d.name, "IfcElement") && !Schema::Ifc4.is_subtype_of(d.name, "IfcFeatureElement"))
+            .map_or("IfcBuildingElementProxy", |d| d.name);
+        let level = target(doc, e, "level", "Level").map(|l| l.id);
+        let storey = level.and_then(|l| self.storeys.get(&l).map(|s| (s.placement, s.elevation)));
+        let pl = match storey {
+            Some((st_pl, elev)) => self.placement(Some(st_pl), [0.0, 0.0, -elev], [1.0, 0.0]),
+            None => self.placement(None, [0.0; 3], [1.0, 0.0]),
+        };
+        let body = self.shape(Body::Faces { points, faces });
+        let mut attrs = vec![("ObjectPlacement", Param::Ref(pl)), ("Representation", Param::Ref(body))];
+        if let Some(c) = requested.filter(|c| !c.eq_ignore_ascii_case(class)) {
+            attrs.insert(0, ("ObjectType", Param::string(c)));
+        }
+        let ifc = self.add_rooted(class, entity_guid(e.id), &entity_name(e), attrs);
+        if let (Some(l), Some(_)) = (level, storey) {
+            if let Some(s) = self.storeys.get_mut(&l) {
+                s.contained.push(ifc);
+            }
+        }
     }
 
     /// A wall in its own frame: origin at (x1, y1, base), x along the centreline.
@@ -593,7 +731,7 @@ impl<'a> Exporter<'a> {
                 [poly.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), poly.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max)],
                 *depth,
             ),
-            Body::Brep { points, .. } => (
+            Body::Brep { points, .. } | Body::Faces { points, .. } => (
                 [points.iter().map(|p| p[0]).fold(f64::INFINITY, f64::min), points.iter().map(|p| p[0]).fold(f64::NEG_INFINITY, f64::max)],
                 points.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max),
             ),
