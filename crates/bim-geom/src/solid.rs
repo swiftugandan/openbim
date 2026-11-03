@@ -140,7 +140,7 @@ impl Solid {
 
     /// Edge-to-edge triangulation of a face: the loops are projected onto the face plane (an
     /// isometry) and triangulated as a polygon with holes; no points are added.
-    fn triangulate_face(&self, face: usize) -> Vec<[usize; 3]> {
+    pub(crate) fn triangulate_face(&self, face: usize) -> Vec<[usize; 3]> {
         let n = match self.face_normal(face).normalized() {
             Some(n) => n,
             None => return Vec::new(), // degenerate face
@@ -250,11 +250,24 @@ impl Solid {
             }
             let prev = sections.last().unwrap();
             let at = path[k];
+            // A section plane normal to a coordinate axis has an exact coordinate; set it
+            // directly so that rounding does not pull the section off its plane.
+            let axis = {
+                let c = [normal.x, normal.y, normal.z];
+                (0..3).find(|&i| c[i] != 0.0 && c[(i + 1) % 3] == 0.0 && c[(i + 2) % 3] == 0.0)
+            };
             let next: Vec<Point3> = prev
                 .iter()
                 .map(|&s| {
                     let t = (at - s).dot(normal) / d_in.dot(normal);
-                    s + d_in * t
+                    let mut p = s + d_in * t;
+                    match axis {
+                        Some(0) => p.x = at.x,
+                        Some(1) => p.y = at.y,
+                        Some(2) => p.z = at.z,
+                        _ => {}
+                    }
+                    p
                 })
                 .collect();
             sections.push(next);
@@ -280,17 +293,81 @@ impl Solid {
         set.len()
     }
 
-    /// Number of faces.
+    /// Number of faces, counted as maximal edge-connected coplanar regions: two faces that share
+    /// an edge and lie in the same plane with the same orientation count once (a face may have
+    /// inner loops). For solids whose faces are already maximal this is `faces.len()`.
     pub fn face_count(&self) -> usize {
-        self.faces.len()
+        let n = self.faces.len();
+        if n == 0 {
+            return 0;
+        }
+        let refs: Vec<Option<[usize; 3]>> = (0..n).map(|f| self.reference_triangle(f)).collect();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn find(p: &mut Vec<usize>, mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        for h in &self.half_edges {
+            let Some(t) = h.twin else { continue };
+            let (f, g) = (h.face, self.half_edges[t].face);
+            if f == g {
+                continue;
+            }
+            let (rf, rg) = match (refs[f], refs[g]) {
+                (Some(a), Some(b)) => (a, b),
+                _ => continue,
+            };
+            if self.coplanar_same_side(rf, rg) {
+                let (a, b) = (find(&mut parent, f), find(&mut parent, g));
+                if a != b {
+                    parent[a] = b;
+                }
+            }
+        }
+        (0..n).filter(|&f| find(&mut parent, f) == f).count()
     }
 
-    /// `V - E + F`, counting every face once whatever its number of loops. It is 2 for a solid
-    /// of genus 0; an extrusion of a polygon with holes also gives 2 because each hole adds
-    /// one inner loop per cap, which offsets its handle (the full Euler–Poincaré formula
-    /// `V - E + F - R = 2 - 2G` with `R` inner rings holds with `R = 2h`, `G = h`).
+    /// The largest-area triangle of a face's triangulation: three vertices defining the face
+    /// plane exactly (wound like the outer loop, so their normal points outward).
+    pub(crate) fn reference_triangle(&self, face: usize) -> Option<[usize; 3]> {
+        let mut best: Option<([usize; 3], f64)> = None;
+        for &t in &self.faces[face].triangles {
+            let a = self.vertices[t[0]].point;
+            let b = self.vertices[t[1]].point;
+            let c = self.vertices[t[2]].point;
+            let area2 = (b - a).cross(c - a).norm2();
+            if area2 > 0.0 && best.map_or(true, |(_, s)| area2 > s) {
+                best = Some((t, area2));
+            }
+        }
+        best.map(|(t, _)| t)
+    }
+
+    /// Whether two reference triangles span the same plane with the same orientation: every
+    /// vertex of each lies exactly on the plane of the other (exact `orient3d`) and the normals
+    /// point the same way.
+    pub(crate) fn coplanar_same_side(&self, rf: [usize; 3], rg: [usize; 3]) -> bool {
+        let p = |i: usize| self.vertices[i].point;
+        let on = |t: [usize; 3], q: Point3| crate::predicates::orient3d(p(t[0]), p(t[1]), p(t[2]), q) == 0.0;
+        if !(rg.iter().all(|&v| on(rf, p(v))) && rf.iter().all(|&v| on(rg, p(v)))) {
+            return false;
+        }
+        let nf = (p(rf[1]) - p(rf[0])).cross(p(rf[2]) - p(rf[0]));
+        let ng = (p(rg[1]) - p(rg[0])).cross(p(rg[2]) - p(rg[0]));
+        nf.dot(ng) > 0.0
+    }
+
+    /// `V - E + F`, counting every stored face once whatever its number of loops (`F` is
+    /// `faces.len()`, the structural count, not the merged-region count of
+    /// [`Solid::face_count`]). It is 2 for a solid of genus 0; an extrusion of a polygon with
+    /// holes also gives 2 because each hole adds one inner loop per cap, which offsets its
+    /// handle (the full Euler–Poincaré formula `V - E + F - R = 2 - 2G` with `R` inner rings
+    /// holds with `R = 2h`, `G = h`).
     pub fn euler_characteristic(&self) -> i64 {
-        self.vertex_count() as i64 - self.edge_count() as i64 + self.face_count() as i64
+        self.vertex_count() as i64 - self.edge_count() as i64 + self.faces.len() as i64
     }
 
     /// Whether the mesh is a closed 2-manifold: every directed edge occurs exactly once and is

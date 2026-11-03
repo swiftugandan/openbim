@@ -298,6 +298,12 @@ fn ear_clip(ring: &[usize], pts: &[Point2]) -> Vec<[usize; 3]> {
             if o <= 0.0 {
                 continue;
             }
+            // With four vertices left, clipping this ear leaves the other three as the last
+            // triangle: skip it when they are collinear (a vertex on a straight edge, kept
+            // because another sheet touches there) and another ear can take it.
+            if n == 4 && orient2d(nx, pts[idx[(i + 2) % n]], p) == 0.0 && (0..n).any(|j| j != i && orient2d(pts[idx[(j + n - 1) % n]], pts[idx[j]], pts[idx[(j + 1) % n]]) > 0.0 && orient2d(pts[idx[(j + 1) % n]], pts[idx[(j + 2) % n]], pts[idx[(j + n - 1) % n]]) != 0.0) {
+                continue;
+            }
             let blocked = (0..n).any(|j| {
                 if j == i || j == (i + n - 1) % n || j == (i + 1) % n {
                     return false;
