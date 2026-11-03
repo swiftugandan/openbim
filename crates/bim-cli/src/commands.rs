@@ -133,6 +133,70 @@ pub(crate) fn sketch(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     Ok(0)
 }
 
+/// `bim import <dir> <file.ifc>`: adds the building elements of an IFC4 or IFC2X3 file as ops
+/// (`bim_ifc::import`), all or none. Each imported entity is created with its id's ULID (or the
+/// import's seed for derived entities) as its name; an entity the project already has (an earlier
+/// import of the same objects) is updated with a `set` per prop whose value differs. A file that
+/// does not parse (truncated, malformed), a FILE_SCHEMA other than IFC4 / IFC2X3 (e.g. IFC4X3), a
+/// reference to an undefined instance under a product's placement or representation, an ifcJSON
+/// file (not read yet), or an id the project holds as another kind exit 2 with nothing changed. What the import
+/// skips or approximates is reported on stderr as `bim: warning: …` lines.
+pub(crate) fn import(args: &[OsString], _out: &mut dyn Write) -> Outcome {
+    let [dir, file] = operands::<2>(args, "import <dir> <file.ifc>")?;
+    let (dir, file) = (Path::new(dir), Path::new(file));
+    let shown = file.display();
+    if file.extension().is_some_and(|e| e.eq_ignore_ascii_case("json")) {
+        return Err(CliError::Input(format!("{shown}: ifcJSON import is not supported yet")));
+    }
+    let bytes = fs::read(file).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let step = bim_ifc::StepFile::read(&bytes[..]).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let imported = bim_ifc::import::import_ifc(&step).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+    let project = Project::open(dir)?;
+    let seeds: std::collections::HashMap<bim_doc::EntityId, &str> =
+        imported.entities.iter().map(|e| (e.id, e.seed.as_str())).collect();
+    let name = |id: bim_doc::EntityId| -> String {
+        seeds
+            .get(&id)
+            .map(|s| s.to_string())
+            .or_else(|| project.written_name(id).map(str::to_string))
+            .unwrap_or_else(|| id.to_ulid_string())
+    };
+    let mut scratch = project.doc.clone();
+    let mut ops_out: Vec<LineOp> = Vec::new();
+    for ent in &imported.entities {
+        let mut ops = Vec::new();
+        let existing = match scratch.get(ent.id) {
+            Some(e) if e.kind != ent.kind => {
+                return Err(CliError::Input(format!(
+                    "{shown}: {} cannot be imported as a {}: the project holds it as a {}",
+                    ent.seed, ent.kind, e.kind
+                )))
+            }
+            Some(e) => Some(e.props.clone()),
+            None => {
+                ops.push(LineOp::Create { seed: ent.seed.clone(), kind: ent.kind.clone() });
+                None
+            }
+        };
+        for (key, value) in &ent.props {
+            if existing.as_ref().and_then(|p| p.get(key)) == Some(value) {
+                continue;
+            }
+            ops.push(LineOp::Set { seed: ent.seed.clone(), key: key.clone(), value: ops::LineValue::from_value(value, &name) });
+        }
+        for op in ops {
+            check_kinds(&project.kinds, &scratch, &op).map_err(|e| CliError::Input(format!("{shown}: {e}")))?;
+            op.apply_to(&mut scratch).map_err(|e| CliError::Input(format!("{shown}: {}", op.describe_error(&e))))?;
+            ops_out.push(op);
+        }
+    }
+    project.apply_ops(&ops_out, &scratch)?;
+    for w in &imported.warnings {
+        eprintln!("bim: warning: {shown}: {w}");
+    }
+    Ok(0)
+}
+
 /// The kind rules of spec/schema.md (Extension kinds) for one op, checked against `doc` as it
 /// stands when the op is reached (so an entity created earlier in the same file is known):
 ///
@@ -530,5 +594,92 @@ mod tests {
         assert!(input_error(read_ops_file(&missing).map(|_| 0)).starts_with(&missing.display().to_string()));
         fs::write(&file, [b'c', 0xff, 0xfe]).unwrap();
         assert!(input_error(read_ops_file(&file).map(|_| 0)).ends_with("not valid UTF-8"));
+    }
+
+    fn run(args: &[&str]) -> (u8, String) {
+        let args: Vec<OsString> = args.iter().map(OsString::from).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = crate::run(&args, &mut out, &mut err);
+        (code, String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn import_is_atomic_and_idempotent() {
+        let tmp = TempDir::new();
+        let p = |name: &str| tmp.path().join(name).to_str().unwrap().to_string();
+        let (src, dst, ifc) = (p("src"), p("dst"), p("m.ifc"));
+        assert_eq!(run(&["init", &src]).0, 0);
+        let ops = p("m.json");
+        fs::write(
+            &ops,
+            r#"{"schema":1,"ops":[
+              {"op":"create","id":"L0","kind":"Level","props":{"elevation":0}},
+              {"op":"create","id":"L1","kind":"Level","props":{"elevation":3}},
+              {"op":"create","id":"WT","kind":"WallType","props":{"layer_thickness":[0.2],"layer_material":["C"]}},
+              {"op":"create","id":"W1","kind":"Wall","props":{"level":{"ref":"L0"},"type":{"ref":"WT"},"x1":0,"y1":0,"x2":5,"y2":0,"height":3}},
+              {"op":"create","id":"D1","kind":"Opening","props":{"host":{"ref":"W1"},"kind":"door","offset":1,"sill":0,"width":0.9,"height":2.1}},
+              {"op":"create","id":"S1","kind":"Slab","props":{"level":{"ref":"L1"},"boundary":[0,0,5,0,5,4,2,4,2,2,0,2],"thickness":0.2}}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(run(&["apply", &src, &ops]).0, 0);
+        assert_eq!(run(&["export", &src, "--format", "ifc", "--out", &ifc]).0, 0);
+        assert_eq!(run(&["init", &dst]).0, 0);
+        let journal = || fs::read_to_string(Path::new(&dst).join("doc.oplog")).unwrap();
+        // A truncated file, an ifcJSON file and a missing file change nothing.
+        let text = fs::read_to_string(&ifc).unwrap();
+        let cut = p("cut.ifc");
+        fs::write(&cut, &text[..text.len() / 2]).unwrap();
+        for f in [cut.as_str(), ops.as_str(), p("missing.ifc").as_str()] {
+            assert_eq!(run(&["import", &dst, f]).0, 2, "{f}");
+        }
+        assert_eq!(journal(), "");
+        // The import keeps the ids (GlobalIds) and the kinds; a second import adds nothing.
+        let (code, err) = run(&["import", &dst, &ifc]);
+        assert_eq!(code, 0, "{err}");
+        let after = journal();
+        for seed in ["W1", "D1", "S1", "L1"] {
+            let ulid = bim_doc::EntityId::derive(seed).to_ulid_string();
+            assert!(after.contains(&format!("create {ulid} ")), "{seed} missing:\n{after}");
+        }
+        let src_doc = Project::open(Path::new(&src)).unwrap().doc;
+        let dst_doc = Project::open(Path::new(&dst)).unwrap().doc;
+        let (a, b) = (bim_model::Model::compile(&src_doc), bim_model::Model::compile(&dst_doc));
+        assert_eq!(a.walls.len(), 1);
+        assert!((a.walls[0].volume - b.walls[0].volume).abs() < 1e-9);
+        assert_eq!(dst_doc.get(bim_doc::EntityId::derive("S1")).unwrap().kind, "Slab");
+        assert!((a.slabs[0].volume - b.slabs[0].volume).abs() < 1e-9);
+        assert_eq!(run(&["import", &dst, &ifc]).0, 0);
+        assert_eq!(journal(), after);
+        // An id the project holds as another kind is refused.
+        let clash = p("clash.json");
+        fs::write(&clash, format!(r#"{{"schema":1,"ops":[{{"op":"create","id":"{}","kind":"Level","props":{{}}}}]}}"#, bim_doc::EntityId::derive("W1").to_ulid_string())).unwrap();
+        let other = p("other");
+        assert_eq!(run(&["init", &other]).0, 0);
+        assert_eq!(run(&["apply", &other, &clash]).0, 0);
+        let (code, err) = run(&["import", &other, &ifc]);
+        assert_eq!(code, 2);
+        assert!(err.contains("holds it as a Level"), "{err}");
+        // Another schema (IFC4X3) and a reference to an undefined instance under a product are
+        // invalid input: exit 2, nothing applied.
+        let fresh = p("fresh");
+        assert_eq!(run(&["init", &fresh]).0, 0);
+        let fresh_journal = || fs::read_to_string(Path::new(&fresh).join("doc.oplog")).unwrap();
+        let x3 = p("x3.ifc");
+        fs::write(&x3, text.replace("FILE_SCHEMA(('IFC4'))", "FILE_SCHEMA(('IFC4X3'))")).unwrap();
+        let dangling = p("dangling.ifc");
+        // Point the wall's placement (its 6th attribute) at an instance the file does not define.
+        let wall = text.lines().find(|l| l.contains("=IFCWALL(")).unwrap();
+        let mut fields: Vec<String> = wall.splitn(7, ',').map(str::to_string).collect();
+        assert!(fields[5].starts_with('#'), "{wall}");
+        fields[5] = "#999999".into();
+        fs::write(&dangling, text.replace(wall, &fields.join(","))).unwrap();
+        assert_ne!(fs::read_to_string(&dangling).unwrap(), text);
+        for (f, why) in [(&x3, "unsupported FILE_SCHEMA"), (&dangling, "does not define")] {
+            let (code, err) = run(&["import", &fresh, f]);
+            assert_eq!(code, 2, "{f}: {err}");
+            assert!(err.contains(why), "{err}");
+        }
+        assert_eq!(fresh_journal(), "");
     }
 }

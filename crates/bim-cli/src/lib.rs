@@ -20,6 +20,7 @@
 //! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
 //! | `bim bcf <dir> import <file.bcfzip>` | mirrors every topic of a BCF 3.0 archive as an `Issue` entity, atomically; a file that is not a BCF 3.0 archive, or a component that is not an entity of the project, exits 2 with nothing applied |
 //! | `bim sketch <dir> <file.json>` | applies the file's direct-modelling commands (spec/sketch.md) through `bim-sketch`, all or none; an invalid command exits 2 |
+//! | `bim import <dir> <file.ifc>` | adds the building elements of an IFC4 or IFC2X3 file as ops (`bim_ifc::import`), all or none; a file that does not parse, of another schema (e.g. IFC4X3) or with a dangling reference under a product exits 2 with nothing applied; skipped elements are reported as `bim: warning:` lines on stderr |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -79,7 +80,8 @@ pub const USAGE: &str = "usage:
   bim bcf <dir> create --title <t> --entity <id> [<id>…]
   bim bcf <dir> export <file.bcfzip>
   bim bcf <dir> import <file.bcfzip>
-  bim sketch <dir> <file.json>";
+  bim sketch <dir> <file.json>
+  bim import <dir> <file.ifc>";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,6 +164,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("export") => geometry::export(operands, out),
         Some("bcf") => bcf::bcf(operands, out),
         Some("sketch") => commands::sketch(operands, out),
+        Some("import") => commands::import(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
     }
 }
