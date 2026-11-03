@@ -215,6 +215,8 @@ def gen_model(out, schema, tag, seed):
     rng = random.Random(seed)  # fixed GlobalIds: deterministic fixtures
     for r in m.by_type("IfcRoot"):
         r.GlobalId = ifcopenshell.guid.compress(format(rng.getrandbits(128), "032x"))
+    for name, st in storeys.items():  # the ids just changed: expect the ones in the written file
+        exp["levels"][name]["id"] = ulid_of_guid(st.GlobalId)
     m.write(f"{out}/source{tag}.ifc")
     # Re-open: expectations come from the written file as ifcopenshell reads it.
     f = ifcopenshell.open(f"{out}/source{tag}.ifc")
