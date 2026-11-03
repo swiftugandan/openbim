@@ -172,7 +172,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: Crate `bim-model` compiles the document into solids per the "Derived geometry rules" of spec/schema.md: layered walls, L/T joins (mitred, no overlap), openings cut through hosts, slabs with openings, columns, beams. `bim export --format gltf` writes one mesh node per entity (`extras.id`). `bim solve --trade arch --json` reports `walls[].volume`, `side_area`, per-layer volumes, `slabs[]` (other arch fields may be empty until T4.2/T4.3). Judge rebuilds each element independently with manifold3d from the schema rules and compares volumes within 1e-6 relative; glTF passes Khronos glTF-Validator.
   - Details: Geometry, glTF frame and arch-output rules are in spec/schema.md and spec/cli.md (side_area, layer order, net slab area, T-joins, unequal L-join mitres, glTF y-up).
 
-- [ ] T2.8: drawings: plans, sections, elevations with lineweights, hatches, associative dimensions → SVG
+- [x] T2.8: drawings: plans, sections, elevations with lineweights, hatches, associative dimensions → SVG
   - Files: Cargo.lock, crates/bim-draw/, crates/bim-cli/
   - Opens: T2.6, T2.7
   - Needs: .oracles/py/bin/python
