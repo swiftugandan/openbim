@@ -329,7 +329,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim export --format ifc`: IfcProject/Site/Building/BuildingStorey hierarchy, IfcWall (with IfcMaterialLayerSet), IfcSlab, IfcColumn, IfcBeam, IfcOpeningElement + IfcRelVoidsElement, IfcDoor/IfcWindow fillings, IfcSpace, Pset_*Common property sets, stable GlobalIds derived from entity ids. Judge: `ifcopenshell.validate` zero errors; ifcopenshell.geom volumes per element equal bim-model volumes within 1e-4 relative.
   - Details: The GlobalId of the object exported for entity e is `ifcopenshell.guid.compress(format(u128(e.id), '032x'))`; storeys carry their Level's GlobalId and an IfcOpeningElement its Opening's. Door/window fillings get `Pset_DoorCommon`/`Pset_WindowCommon`; every exported IfcWall/IfcSlab/IfcColumn/IfcBeam/IfcSpace carries its `Pset_<Class>Common`.
 
-- [ ] T5.3: IFC4 import into the document graph
+- [x] T5.3: IFC4 import into the document graph
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-cli/
   - Opens: T5.2, T2.10
   - Needs: .oracles/py/bin/python
