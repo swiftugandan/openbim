@@ -19,6 +19,8 @@ bim-bcf = { path = "../standards/bcf" }
 bim-doc = { path = "../bim-doc" }
 bim-ifc = { path = "../standards/ifc" }
 bim-model = { path = "../bim-model" }
+bim-plugin = { path = "../bim-plugin" }
 bim-schema = { path = "../bim-schema" }
 bim-store = { path = "../bim-store" }
 bim-sync = { path = "../bim-sync" }
+serde_json = { version = "=1.0.140", features = ["preserve_order"] }
