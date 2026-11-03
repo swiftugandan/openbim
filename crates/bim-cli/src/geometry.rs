@@ -5,9 +5,10 @@
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
 //!   [`bim_model::gltf`]: one mesh node per element with `extras.id`.
 //! * `bim export <dir> --format ifc --out <file>` writes the IFC4 file of [`bim_ifc::export`].
-//! * `bim export <dir> --format svg --view <view> --out <file>` writes the drawing of
-//!   [`bim_draw`] (plan, section or elevation, spec/cli.md); an unknown or unparseable view is a
-//!   usage error (exit 2), as is `--view` with another format or svg without it.
+//! * `bim export <dir> --format svg|dxf|pdf --view <view> --out <file>` writes the drawing of
+//!   [`bim_draw`] (plan, section or elevation, spec/cli.md) as SVG, AutoCAD 2013 DXF or PDF 1.7;
+//!   an unknown or unparseable view is a usage error (exit 2), as is `--view` with another format
+//!   or a drawing format without it.
 //!   Any other format is a usage error (exit 2). The file is written to a temporary file next to it and renamed into place.
 
 use std::ffi::OsString;
@@ -64,7 +65,7 @@ impl Parsed<'_> {
 }
 
 /// `bim export <dir> --format gltf|ifc --out <file>` and
-/// `bim export <dir> --format svg --view <view> --out <file>`.
+/// `bim export <dir> --format svg|dxf|pdf --view <view> --out <file>`.
 pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     let form = "export <dir> --format <format> [--view <view>] --out <file>";
     let p = parse(args, &["--format", "--out", "--view"], form)?;
@@ -73,33 +74,38 @@ pub(crate) fn export(args: &[OsString], _out: &mut dyn Write) -> Outcome {
     }
     let format = p.value("--format").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--format` is required")))?;
     let file = p.value("--out").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--out` is required")))?;
-    if format != "gltf" && format != "ifc" && format != "svg" {
-        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc, svg)", format.to_string_lossy())));
-    }
+    let Some(format) = format.to_str().filter(|f| ["gltf", "ifc", "svg", "dxf", "pdf"].contains(f)) else {
+        return Err(CliError::Usage(format!("unknown export format `{}` (known: gltf, ifc, svg, dxf, pdf)", format.to_string_lossy())));
+    };
+    let drawing_format = matches!(format, "svg" | "dxf" | "pdf");
     let view = p.value("--view");
-    if format == "svg" && view.is_none() {
+    if drawing_format && view.is_none() {
         return Err(CliError::Usage(format!("`bim {form}`: `--view` is required for a drawing format")));
     }
-    if format != "svg" && view.is_some() {
+    if !drawing_format && view.is_some() {
         return Err(CliError::Usage(format!("`bim {form}`: `--view` applies to drawing formats only")));
     }
     let project = Project::open(Path::new(p.positional[0]))?;
-    let text = if format == "ifc" {
+    let bytes = if format == "ifc" {
         let name = Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let text = bim_ifc::export::export_ifc4_string(&project.doc, &name);
         if text.is_empty() {
             return Err(CliError::Input(format!("{}: the model has values IFC cannot represent", Path::new(file).display())));
         }
-        text
+        text.into_bytes()
     } else if let Some(view) = view {
         let view = view.to_str().ok_or_else(|| CliError::Usage(format!("view `{}` is not valid UTF-8", view.to_string_lossy())))?;
         let view = bim_draw::View::parse(&project.doc, view).map_err(|e| CliError::Usage(e.to_string()))?;
         let drawing = bim_draw::draw(&project.doc, &Model::compile(&project.doc), &view);
-        bim_draw::svg::to_svg(&drawing)
+        match format {
+            "dxf" => bim_draw::dxf::to_dxf(&drawing).into_bytes(),
+            "pdf" => bim_draw::pdf::to_pdf(&drawing),
+            _ => bim_draw::svg::to_svg(&drawing).into_bytes(),
+        }
     } else {
-        bim_model::gltf::to_gltf(&Model::compile(&project.doc).elements)
+        bim_model::gltf::to_gltf(&Model::compile(&project.doc).elements).into_bytes()
     };
-    write_atomically(Path::new(file), text.as_bytes())?;
+    write_atomically(Path::new(file), &bytes)?;
     Ok(0)
 }
 
@@ -167,6 +173,21 @@ mod tests {
         let wall = bim_ifc::export::entity_guid(bim_doc::EntityId::derive("W"));
         assert!(text.contains(&format!("IFCWALL('{wall}'")), "{text}");
         assert!(text.contains("IFCSLAB(") && text.contains("'Pset_WallCommon'"));
+        let dxf = tmp.path().join("m.dxf");
+        let (code, out, err) = run(&["export", d, "--format", "dxf", "--view", "plan:L1@1.2", "--out", dxf.to_str().unwrap()]);
+        assert_eq!((code, out.as_str()), (0, ""), "{err}");
+        let text = fs::read_to_string(&dxf).unwrap();
+        assert!(text.contains("  1\nAC1027\n") && text.contains("  0\nHATCH\n") && text.contains("1001\nOPENBIM\n1000\nW\n"), "{text}");
+        let pdf = tmp.path().join("m.pdf");
+        let (code, out, err) = run(&["export", d, "--format", "pdf", "--view", "plan:L1@1.2", "--out", pdf.to_str().unwrap()]);
+        assert_eq!((code, out.as_str()), (0, ""), "{err}");
+        let bytes = fs::read(&pdf).unwrap();
+        assert!(bytes.starts_with(b"%PDF-1.7\n") && bytes.ends_with(b"%%EOF\n"));
+        assert!(String::from_utf8_lossy(&bytes).contains("/OC /CUT BDC"));
+        for fmt in ["dxf", "pdf"] {
+            let (code, _, err) = run(&["export", d, "--format", fmt, "--view", "plan:NOPE@1.2", "--out", pdf.to_str().unwrap()]);
+            assert_eq!(code, 2, "{err}");
+        }
     }
 
     #[test]
@@ -182,6 +203,9 @@ mod tests {
             &["export", "d", "--out", "f"],
             &["export", "d", "--format", "obj", "--out", "f"],
             &["export", "d", "--format", "svg", "--out", "f"],
+            &["export", "d", "--format", "dxf", "--out", "f"],
+            &["export", "d", "--format", "pdf", "--out", "f"],
+            &["export", "d", "--format", "ifc", "--view", "plan:L1@1.2", "--out", "f"],
             &["export", "d", "--format", "gltf", "--view", "elevation:s", "--out", "f"],
         ] {
             let (code, out, err) = run(args);
