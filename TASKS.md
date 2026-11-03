@@ -337,7 +337,8 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim import <dir> f.ifc`: storeys → Levels, walls/slabs/columns/beams/openings/spaces → schema entities (parametric where the IFC is a standard extrusion; otherwise imported as a `Shape`, spec/sketch.md), placements resolved, property sets kept as props. Judge generates IFC files at run time with ifcopenshell.api (independent producer) and checks element counts and volumes within 1e-4; import → export → ifcopenshell volumes conserve within 1e-4.
   - Details: Import reads IFC4 and IFC2X3. An imported entity's id is the 26-char ULID spelling of the 128 bits of its GlobalId (so re-export reproduces it). Property-set values become props `<PsetName>.<PropName>`: labels/text → Text, numeric measures and integers → Num, IfcBoolean → Bool. An Opening's `kind` comes from its filling (IfcDoor → door, IfcWindow → window). A non-parametric element becomes a `Shape` whose `classification` is its IFC class, whose `level` is its storey and whose faces are its body's faces (a non-planar face is split into triangles fanned from its first vertex); export writes a placed closed Shape as an occurrence of its `classification` class with an IfcFacetedBrep of its faces (the rule T5.9 builds on).
 
-- [ ] T5.4: reference-corpus round-trip judge (Duplex, Schependomlaan, buildingSMART samples)
+- [!] T5.4: reference-corpus round-trip judge (Duplex, Schependomlaan, buildingSMART samples)
+  - Blocked: Needs corpus/ifc, which does not exist (see loop/setup.sh)
   - Files: Cargo.lock, crates/standards/ifc/, crates/bim-model/, crates/bim-cli/
   - Opens: T5.3, T2.9
   - Needs: corpus/ifc, .oracles/py/bin/python
