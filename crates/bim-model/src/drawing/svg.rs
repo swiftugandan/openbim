@@ -11,7 +11,7 @@
 
 use std::fmt::Write;
 
-use crate::{Drawing, Layer, Shape, P2, SCALE};
+use super::{Drawing, Layer, Shape, P2, SCALE};
 
 /// Margin around the drawing, paper mm.
 const MARGIN: f64 = 10.0;
