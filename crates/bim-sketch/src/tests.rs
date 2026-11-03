@@ -331,7 +331,7 @@ fn a_face_edge_on_several_faces_gets_a_new_side_not_a_stretch() {
             assert!(s.face_normal(s.face_by_id(id).unwrap()).unwrap()[1].abs() < 1e-9, "side {id} is perpendicular to the fin");
         }
         // The box alone is still a closed 30 m3 solid.
-        let only_box = Shape { vertices: s.vertices.clone(), faces: s.faces.iter().filter(|f| f.id <= 6).cloned().collect(), edges: Vec::new() };
+        let only_box = Shape { vertices: s.vertices.clone(), faces: s.faces.iter().filter(|f| f.id <= 6).cloned().collect(), edges: Vec::new(), products: None };
         assert!(only_box.is_closed() && close(only_box.volume(), 30.0));
     }
 }
@@ -652,4 +652,357 @@ fn a_push_onto_a_stranded_vertex_reuses_it() {
     planar_faces(&s);
     assert_eq!(s.vertices.len(), 8, "the copies land on the orphans and reuse them");
     assert!(s.is_closed() && close(s.volume(), 30.0), "{}", s.volume());
+}
+
+// ------------------------------------------------------------------ T2.11: offset, follow-me,
+// move / rotate / scale, paint, components
+
+fn assert_solid(s: &Shape, volume: f64) {
+    assert!(s.is_closed(), "not closed: {:?}", s.faces);
+    assert!(close(s.volume(), volume), "volume {} != {volume}", s.volume());
+    planar_faces(s);
+}
+
+#[test]
+fn offset_inward_and_outward_of_a_rectangle() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {{"op": "offset", "shape": "box", "face": 1, "distance": 0.5}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), vec![1, 2]);
+    assert!(close(area(&s, 2), 3.0 * 2.0), "inner (w - 2d)(h - 2d)");
+    assert!(close(area(&s, 1), 12.0 - 6.0), "ring");
+    assert_eq!(s.faces[s.face_by_id(1).unwrap()].loops.len(), 2);
+    for p in [[0.5, 0.5, 0.0], [3.5, 0.5, 0.0], [3.5, 2.5, 0.0], [0.5, 2.5, 0.0]] {
+        find(&s, p);
+    }
+    planar_faces(&s);
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {{"op": "offset", "shape": "box", "face": 1, "distance": -1}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), vec![1, 2]);
+    assert_eq!(s.faces[s.face_by_id(1).unwrap()].loops.len(), 1, "outward: the face is unchanged");
+    assert!(close(area(&s, 1), 12.0));
+    assert!(close(area(&s, 2), 6.0 * 5.0 - 12.0), "ring (w + 2d)(h + 2d) - wh");
+    find(&s, [-1.0, -1.0, 0.0]);
+    find(&s, [5.0, 4.0, 0.0]);
+    // Too far inward: the offset loop would vanish or turn inside out.
+    assert!(b.sketch(r#"{"op": "offset", "shape": "box", "face": 1, "distance": 1.5}"#).is_err());
+    assert!(b.sketch(r#"{"op": "offset", "shape": "box", "face": 1, "distance": 2}"#).is_err());
+    assert!(b.sketch(r#"{"op": "offset", "shape": "box", "face": 9, "distance": 0.1}"#).is_err());
+}
+
+#[test]
+fn offset_on_a_solid_then_push_in_is_a_tray() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "offset", "shape": "box", "face": 1, "distance": 0.5}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), (1..=7).collect::<Vec<_>>());
+    assert_solid(&s, 30.0);
+    b.ok(r#"{"op": "pushpull", "shape": "box", "face": 7, "distance": -1}"#);
+    assert_solid(&b.shape("box"), 24.0);
+}
+
+#[test]
+fn offset_of_a_face_with_a_hole_moves_the_enclosed_hole_to_the_inner_face() {
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "h", "corner": [0, 0, 0], "u": [10, 0, 0], "v": [0, 10, 0]},
+            {"op": "rect", "shape": "h", "corner": [4, 4, 0], "u": [2, 0, 0], "v": [0, 2, 0]},
+            {"op": "offset", "shape": "h", "face": 1, "distance": 1}"#);
+    let s = b.shape("h");
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert!(close(area(&s, 1), 100.0 - 64.0));
+    assert!(close(area(&s, 3), 64.0 - 4.0), "the hole moved to the inner face");
+    assert!(close(area(&s, 2), 4.0));
+    planar_faces(&s);
+    // A loop on, through or inside the hole is invalid; one around it takes it along.
+    for d in ["3", "3.2"] {
+        assert!(b.sketch(&format!(r#"{{"op": "offset", "shape": "h", "face": 3, "distance": {d}}}"#)).is_err(), "{d}");
+    }
+    b.ok(r#"{"op": "offset", "shape": "h", "face": 3, "distance": 2.5}"#);
+    let s = b.shape("h");
+    assert!(close(area(&s, 4), 9.0 - 4.0));
+    assert!(close(area(&s, 3), 60.0 - 5.0));
+}
+
+#[test]
+fn offset_outward_of_a_face_with_a_hole_keeps_the_hole_on_the_face() {
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "h", "corner": [0, 0, 0], "u": [4, 0, 0], "v": [0, 4, 0]},
+            {"op": "rect", "shape": "h", "corner": [1.5, 1.5, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+            {"op": "offset", "shape": "h", "face": 1, "distance": -0.5}"#);
+    let s = b.shape("h");
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(s.faces[s.face_by_id(1).unwrap()].loops.len(), 2, "face 1 keeps its hole");
+    assert!(close(area(&s, 1), 16.0 - 1.0), "face 1 is unchanged");
+    assert!(close(area(&s, 2), 1.0));
+    assert!(close(area(&s, 3), 25.0 - 16.0), "the new ring 5x5 - 4x4");
+    assert_eq!(s.faces[s.face_by_id(3).unwrap()].loops.len(), 2);
+    find(&s, [-0.5, -0.5, 0.0]);
+    find(&s, [4.5, 4.5, 0.0]);
+    planar_faces(&s);
+}
+
+#[test]
+fn offset_outward_of_the_ring_left_by_an_inward_offset() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {{"op": "offset", "shape": "box", "face": 1, "distance": 0.5}},
+            {{"op": "offset", "shape": "box", "face": 1, "distance": -1}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), vec![1, 2, 3]);
+    assert_eq!(s.faces[s.face_by_id(1).unwrap()].loops.len(), 2, "the ring keeps its hole");
+    assert!(close(area(&s, 1), 12.0 - 6.0));
+    assert!(close(area(&s, 2), 6.0));
+    assert!(close(area(&s, 3), 6.0 * 5.0 - 12.0));
+    planar_faces(&s);
+    // The outward ring has a hole too, and offsets outward again.
+    b.ok(r#"{"op": "offset", "shape": "box", "face": 3, "distance": -1}"#);
+    let s = b.shape("box");
+    assert_eq!(ids(&s), vec![1, 2, 3, 4]);
+    assert!(close(area(&s, 3), 30.0 - 12.0), "face 3 is unchanged");
+    assert!(close(area(&s, 4), 8.0 * 7.0 - 30.0));
+    planar_faces(&s);
+}
+
+#[test]
+fn followme_of_a_centred_square_along_an_l_path() {
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "f", "corner": [0, -0.5, -0.5], "u": [0, 1, 0], "v": [0, 0, 1]},
+            {"op": "followme", "shape": "f", "face": 1, "path": [[0, 0, 0], [4, 0, 0], [4, 3, 0]]}"#);
+    let s = b.shape("f");
+    assert_solid(&s, 7.0);
+    assert_eq!(s.faces.len(), 4 * 2 + 2);
+    assert_eq!(s.vertices.len(), 12);
+    find(&s, [4.5, -0.5, 0.5]);
+    find(&s, [3.5, 0.5, -0.5]);
+    find(&s, [4.5, 3.0, 0.5]);
+    // The end cap keeps the face's id, facing along the last segment.
+    let f = s.face_by_id(1).unwrap();
+    assert!(dist(s.face_normal(f).unwrap(), [0.0, 1.0, 0.0]) < 1e-12);
+    // Off-centre: A (L1 + L2) less the mitre loss.
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "g", "corner": [0, 0, 0], "u": [0, 1, 0], "v": [0, 0, 1]},
+            {"op": "followme", "shape": "g", "face": 1, "path": [[0, 0, 0], [4, 0, 0], [4, 3, 0]]}"#);
+    assert_solid(&b.shape("g"), 6.0);
+}
+
+#[test]
+fn followme_against_the_normal_and_on_a_solid_face() {
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "f", "corner": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+            {"op": "followme", "shape": "f", "face": 1, "path": [[0, 0, 0], [0, 0, -2]]}"#);
+    assert_solid(&b.shape("f"), 2.0);
+    // The top of a box swept up and over: the sweep replaces the face and joins the box.
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 2.5], [0, 0, 4.5]]}}"#));
+    let s = b.shape("box");
+    assert_solid(&s, 30.0 + 24.0);
+    assert_eq!(s.faces.len(), 6 + 4);
+    for cmds in [
+        r#"{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 4.5]]}"#,
+        r#"{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 4.5], [1, 0, 4.5]]}"#,
+        r#"{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 4], [0, 0, 5]]}"#,
+        r#"{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 4.5], [0, 0, 5], [0, 0, 4.8]]}"#,
+        r#"{"op": "followme", "shape": "box", "face": 1, "path": [[0, 0, 4.5], [0, 0, 5], [0, 0.01, 5]]}"#,
+    ] {
+        assert!(b.sketch(cmds).is_err(), "{cmds}");
+    }
+}
+
+#[test]
+fn move_a_face_stretches_its_neighbours() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "move", "shape": "box", "faces": [1], "vector": [0, 0, 1]}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), (1..=6).collect::<Vec<_>>());
+    assert_eq!(s.vertices.len(), 8, "indices kept, nothing appended");
+    assert_solid(&s, 42.0);
+    // A slanted top: move one top edge up; the sides stay planar quads.
+    let (i, j) = (find(&s, [0.0, 3.0, 3.5]), find(&s, [4.0, 3.0, 3.5]));
+    b.ok(&format!(r#"{{"op": "move", "shape": "box", "edges": [[{i}, {j}]], "vector": [0, 0, 1]}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), (1..=6).collect::<Vec<_>>());
+    assert_solid(&s, 4.0 * 3.0 * 4.0);
+}
+
+#[test]
+fn a_corner_moved_off_its_plane_fans_the_face() {
+    let mut b = Bench::new();
+    b.ok(&format!("{RECT}, {PUSH}"));
+    let s0 = b.shape("box");
+    let top = s0.faces[s0.face_by_id(1).unwrap()].loops[0].clone();
+    let v = top[2];
+    b.ok(&format!(r#"{{"op": "move", "shape": "box", "vertices": [{v}], "vector": [0, 0, 0.5]}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), (1..=7).collect::<Vec<_>>());
+    planar_faces(&s);
+    assert!(s.is_closed());
+    let lo = *top.iter().min().unwrap();
+    let mut rl = top.clone();
+    let k = rl.iter().position(|&x| x == lo).unwrap();
+    rl.rotate_left(k);
+    let tris = [vec![rl[0], rl[1], rl[2]], vec![rl[0], rl[2], rl[3]]];
+    let keep = tris.iter().position(|t| t.contains(&top[0])).unwrap();
+    let sorted = |mut t: Vec<usize>| {
+        t.sort_unstable();
+        t
+    };
+    let got1 = s.faces[s.face_by_id(1).unwrap()].loops[0].clone();
+    let got7 = s.faces[s.face_by_id(7).unwrap()].loops[0].clone();
+    assert_eq!(got1[0], top[0], "the kept triangle starts at the face's first vertex");
+    assert_eq!(sorted(got1), sorted(tris[keep].clone()));
+    assert_eq!(sorted(got7), sorted(tris[1 - keep].clone()));
+    // Volume: the box plus a tetrahedron of height 0.5 over each fan triangle holding the vertex.
+    let lifted = tris.iter().filter(|t| t.contains(&v)).count() as f64;
+    assert!(close(s.volume(), 30.0 + lifted * 6.0 * 0.5 / 3.0), "{}", s.volume());
+}
+
+#[test]
+fn a_face_with_holes_made_non_planar_is_invalid() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "offset", "shape": "box", "face": 1, "distance": 0.5}}"#));
+    let before = b.doc.clone();
+    let s = b.shape("box");
+    let v = s.faces[s.face_by_id(1).unwrap()].loops[0][0];
+    assert!(b.sketch(&format!(r#"{{"op": "move", "shape": "box", "vertices": [{v}], "vector": [0, 0, 0.5]}}"#)).is_err());
+    assert_eq!(b.doc, before);
+}
+
+#[test]
+fn rotate_and_scale_the_whole_box() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "rotate", "shape": "box", "vertices": [0, 1, 2, 3, 4, 5, 6, 7], "centre": [1, 1, 0], "axis": [0, 0, 2], "angle": 1.0}}"#));
+    assert_solid(&b.shape("box"), 30.0);
+    b.ok(r#"{"op": "scale", "shape": "box", "faces": [1, 2, 3, 4, 5, 6], "origin": [0, 0, 0], "factors": [2, 0.5, 3]}"#);
+    assert_solid(&b.shape("box"), 90.0);
+    // A mirror keeps the solid outward.
+    b.ok(r#"{"op": "scale", "shape": "box", "faces": [1, 2, 3, 4, 5, 6], "origin": [0, 0, 0], "factors": [-1, 1, 1]}"#);
+    assert_solid(&b.shape("box"), 90.0);
+    assert!(b.sketch(r#"{"op": "scale", "shape": "box", "faces": [1], "origin": [0, 0, 0], "factors": [0, 1, 1]}"#).is_err());
+    assert!(b.sketch(r#"{"op": "rotate", "shape": "box", "faces": [1], "centre": [0, 0, 0], "axis": [0, 0, 0], "angle": 1}"#).is_err());
+    assert!(b.sketch(r#"{"op": "move", "shape": "box", "vertices": [99], "vector": [1, 0, 0]}"#).is_err());
+    assert!(b.sketch(r#"{"op": "move", "shape": "box", "edges": [[0, 6]], "vector": [1, 0, 0]}"#).is_err());
+}
+
+#[test]
+fn copies_and_arrays() {
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "move", "shape": "box", "faces": [1, 2, 3, 4, 5, 6], "vector": [6, 0, 0], "copy": true, "array": 3}}"#));
+    let s = b.shape("box");
+    assert_eq!(ids(&s), (1..=24).collect::<Vec<_>>());
+    assert_eq!(s.vertices.len(), 32);
+    assert_solid(&s, 120.0);
+    find(&s, [22.0, 3.0, 2.5]);
+    // A mirrored copy is still an outward solid.
+    let mut b = Bench::new();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "scale", "shape": "box", "faces": [1, 2, 3, 4, 5, 6], "origin": [-1, 0, 0], "factors": [-1, 1, 1], "copy": true}}"#));
+    let s = b.shape("box");
+    assert_solid(&s, 60.0);
+    find(&s, [-6.0, 3.0, 2.5]);
+    // Rotated copies about a corner of a square share nothing; a full turn back onto the original is invalid.
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "rect", "shape": "q", "corner": [2, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]},
+            {"op": "rotate", "shape": "q", "faces": [1], "centre": [0, 0, 0], "axis": [0, 0, 1], "angle": 1.5707963267948966, "copy": true, "array": 3}"#);
+    let s = b.shape("q");
+    assert_eq!(ids(&s), vec![1, 2, 3, 4]);
+    find(&s, [-1.0, 2.0, 0.0]);
+    find(&s, [0.0, -3.0, 0.0]);
+    assert!(b.sketch(r#"{"op": "rotate", "shape": "q", "faces": [1], "centre": [0, 0, 0], "axis": [0, 0, 1], "angle": 1.5707963267948966, "copy": true, "array": 4}"#).is_err());
+    assert!(b.sketch(r#"{"op": "move", "shape": "q", "faces": [1], "vector": [0, 0, 0], "copy": true}"#).is_err());
+    // Copied edges close a face like drawn lines.
+    let mut b = Bench::new();
+    b.ok(r#"{"op": "line", "shape": "e", "from": [0, 0, 0], "to": [1, 0, 0]}, {"op": "line", "shape": "e", "from": [1, 0, 0], "to": [1, 1, 0]},
+            {"op": "line", "shape": "e", "from": [1, 1, 0], "to": [0, 1, 0]}, {"op": "line", "shape": "e", "from": [0, 1, 0], "to": [0, 0, 0]},
+            {"op": "erase", "shape": "e", "edges": [[0, 1]]}"#);
+    let s = b.shape("e");
+    assert!(s.faces.is_empty());
+    let es: Vec<String> = s.edges.iter().map(|&(a, b)| format!("[{a}, {b}]")).collect();
+    b.ok(&format!(r#"{{"op": "move", "shape": "e", "edges": [{}], "vector": [5, 0, 0], "copy": true}}"#, es.join(", ")));
+    assert!(b.shape("e").faces.is_empty(), "three copied edges close nothing");
+}
+
+#[test]
+fn a_rotated_copy_sharing_an_axis_edge_does_not_panic_and_is_deterministic() {
+    let cmds = format!(
+        r#"{RECT}, {PUSH}, {{"op": "offset", "shape": "box", "face": 1, "distance": 0.4}},
+           {{"op": "pushpull", "shape": "box", "face": 7, "distance": -0.5}},
+           {{"op": "rotate", "shape": "box", "faces": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], "centre": [0, 0, 0], "axis": [0, 0, 1], "angle": 0.5, "copy": true, "array": 2}}"#
+    );
+    let mut a = Bench::new();
+    a.ok(&cmds);
+    let mut c = Bench::new();
+    c.ok(&cmds);
+    assert_eq!(a.doc, c.doc);
+    assert_eq!(a.shape("box").faces.len(), 33);
+}
+
+#[test]
+fn paint_follows_faces() {
+    let mut b = Bench::new();
+    let p = EntityId::parse("P1");
+    b.doc.apply(Op::Create { id: p, kind: "Product".into() }).unwrap();
+    b.ok(&format!(r#"{RECT}, {PUSH}, {{"op": "paint", "shape": "box", "faces": [1, 3], "product": "P1"}}"#));
+    let e = b.doc.get(EntityId::parse("box")).unwrap();
+    let want: Vec<Value> = b.shape("box").faces.iter().map(|f| if [1, 3].contains(&f.id) { Value::Ref(p) } else { Value::Text(String::new()) }).collect();
+    assert_eq!(e.props.get("face_products"), Some(&Value::List(want)));
+    // An offset's inner face is part of the painted surface; a fan triangle keeps the paint.
+    b.ok(r#"{"op": "offset", "shape": "box", "face": 1, "distance": 0.5}"#);
+    let s = b.shape("box");
+    assert_eq!(s.product(7), Some(p));
+    assert_eq!(s.product(2), None);
+    b.ok(r#"{"op": "paint", "shape": "box", "faces": [3, 7], "product": null}"#);
+    let s = b.shape("box");
+    assert_eq!((s.product(1), s.product(3), s.product(7)), (Some(p), None, None));
+    // Erasing a painted face drops its paint, so a later face with its id is unpainted.
+    for bad in [
+        r#"{"op": "paint", "shape": "box", "faces": [99], "product": "P1"}"#,
+        r#"{"op": "paint", "shape": "box", "faces": [1], "product": "nope"}"#,
+        r#"{"op": "paint", "shape": "box", "faces": [1], "product": "box"}"#,
+        r#"{"op": "paint", "shape": "nobox", "faces": [1], "product": "P1"}"#,
+    ] {
+        assert!(b.sketch(bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn make_component_moves_the_transform_to_the_instance() {
+    let mut b = Bench::new();
+    b.ok(&format!("{RECT}, {PUSH}"));
+    let shape = EntityId::parse("box");
+    let t: Vec<Value> = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 10.0, 0.0, 0.0, 1.0].iter().map(|&x| Value::Num(x)).collect();
+    b.doc.apply(Op::Set { id: shape, key: "transform".into(), value: Value::List(t.clone()) }).unwrap();
+    let out = apply(&b.doc, r#"{"schema": 1, "commands": [{"op": "make_component", "shape": "box", "definition": "D", "instance": "I", "name": "Crate"}]}"#).unwrap();
+    for op in out.ops.clone() {
+        b.doc.apply(op).unwrap();
+    }
+    let (d, i) = (EntityId::parse("D"), EntityId::parse("I"));
+    assert_eq!(out.names.get(&d).map(String::as_str), Some("D"));
+    assert_eq!(out.names.get(&i).map(String::as_str), Some("I"));
+    let de = b.doc.get(d).unwrap();
+    assert_eq!(de.kind, "ComponentDefinition");
+    assert_eq!(de.props.get("name"), Some(&Value::Text("Crate".into())));
+    assert_eq!(de.props.get("shape"), Some(&Value::Ref(shape)));
+    let ie = b.doc.get(i).unwrap();
+    assert_eq!(ie.kind, "ComponentInstance");
+    assert_eq!(ie.props.get("definition"), Some(&Value::Ref(d)));
+    assert_eq!(ie.props.get("transform"), Some(&Value::List(t)));
+    assert_eq!(b.doc.get(shape).unwrap().props.get("transform"), Some(&identity()));
+    let before = b.doc.clone();
+    for bad in [
+        r#"{"op": "make_component", "shape": "box", "definition": "D", "instance": "I2", "name": "x"}"#,
+        r#"{"op": "make_component", "shape": "box", "definition": "D2", "instance": "box", "name": "x"}"#,
+        r#"{"op": "make_component", "shape": "box", "definition": "D2", "instance": "D2", "name": "x"}"#,
+        r#"{"op": "make_component", "shape": "missing", "definition": "D3", "instance": "I3", "name": "x"}"#,
+        r#"{"op": "make_component", "shape": "box", "definition": "D4", "instance": "I4", "name": "x"}, {"op": "rect", "shape": "I4", "corner": [0, 0, 0], "u": [1, 0, 0], "v": [0, 1, 0]}"#,
+    ] {
+        assert!(b.sketch(bad).is_err(), "{bad}");
+        assert_eq!(b.doc, before);
+    }
+    // A Shape drawn, swept and made a component in one file.
+    b.ok(r#"{"op": "rect", "shape": "f", "corner": [0, 0, 0], "u": [0, 1, 0], "v": [0, 0, 1]},
+            {"op": "followme", "shape": "f", "face": 1, "path": [[0, 0, 0], [3, 0, 0], [3, 3, 0]]},
+            {"op": "make_component", "shape": "f", "definition": "FD", "instance": "FI", "name": "Frame"},
+            {"op": "pushpull", "shape": "f", "face": 1, "distance": 1}"#);
+    let ie = b.doc.get(EntityId::parse("FI")).unwrap();
+    assert_eq!(ie.props.get("transform"), Some(&identity()));
+    assert!(b.shape("f").is_closed());
 }
