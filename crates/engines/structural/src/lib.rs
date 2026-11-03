@@ -109,13 +109,30 @@
 //! // Deflection is measured from the chord between the displaced ends.
 //! assert!(env.deflection > 0.0 && env.deflection < uz.abs());
 //! ```
-
+//!
+//! # The `struct` trade engine
+//!
+//! With the `engine` feature, `StructEngine` implements `bim_plugin::TradeEngine` under the
+//! name `struct` (`bim solve <dir> --trade struct`, spec/cli.md): it extracts the analytical
+//! stick model from the document's Columns and Beams, distributes AreaLoads to the supporting
+//! beams by nearest-beam tributary regions, applies PointLoads, Supports and
+//! LoadCombinations, solves with [`Frame3`] and reports nodes, member envelopes with
+//! utilization, reactions and tributary areas. The extraction and output rules are documented
+//! in the (private) `engine` module of the source.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+#[cfg(feature = "engine")]
+mod engine;
 mod frame2d;
 mod frame3d;
 mod linalg;
+#[cfg(feature = "engine")]
+mod span;
+#[cfg(feature = "engine")]
+mod tributary;
 
 pub use frame2d::{Frame, Results};
+#[cfg(feature = "engine")]
+pub use engine::StructEngine;
 pub use frame3d::{Envelope, Frame3, LoadCombination, Results3, Section3, ENVELOPE_STATIONS};
