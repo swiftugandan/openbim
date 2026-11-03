@@ -18,6 +18,7 @@ path = "src/main.rs"
 bim-arch = { path = "../engines/arch" }
 bim-bcf = { path = "../standards/bcf" }
 bim-doc = { path = "../bim-doc" }
+bim-draw = { path = "../bim-draw" }
 bim-ifc = { path = "../standards/ifc" }
 bim-model = { path = "../bim-model" }
 bim-plugin = { path = "../bim-plugin" }

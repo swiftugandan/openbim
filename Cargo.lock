@@ -99,6 +99,7 @@ dependencies = [
  "bim-arch",
  "bim-bcf",
  "bim-doc",
+ "bim-draw",
  "bim-ifc",
  "bim-model",
  "bim-plugin",
@@ -121,6 +122,15 @@ dependencies = [
 [[package]]
 name = "bim-doc"
 version = "0.1.0"
+
+[[package]]
+name = "bim-draw"
+version = "0.1.0"
+dependencies = [
+ "bim-doc",
+ "bim-geom",
+ "bim-model",
+]
 
 [[package]]
 name = "bim-geom"
