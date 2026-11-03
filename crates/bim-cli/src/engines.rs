@@ -1,11 +1,13 @@
 //! The trades and standards of `bim`, resolved only through a [`bim_plugin::Registry`]:
 //!
-//! * [`registry`] registers the shipped engines (today the `arch` trade, [`bim_arch::ArchEngine`]);
-//!   `bim-plugin` itself has no built-ins.
-//! * `bim solve <dir> --trade <trade> [--json]` looks the trade up with [`Registry::engine`] and
-//!   prints its result: with `--json` as one JSON document, without it as text, one line per
-//!   element of each list in the result (`wall W1 volume 2.4 side_area 12`, see [`result_text`]).
-//!   An unknown trade is a usage error (exit 2).
+//! * [`registry`] registers the shipped engines (the `arch` trade, [`bim_arch::ArchEngine`], and
+//!   the `mep` trade, [`bim_mep::MepEngine`]); `bim-plugin` itself has no built-ins.
+//! * `bim solve <dir> --trade <trade> [--method newton|hardy-cross] [--json]` looks the trade up
+//!   with [`Registry::engine`] and prints its result: with `--json` as one JSON document, without
+//!   it as text, one line per element of each list in the result (`wall W1 volume 2.4 side_area
+//!   12`, see [`result_text`]). An unknown trade is a usage error (exit 2). `--method` picks the
+//!   network solver of the `mep` trade (default `newton`); an unknown method, or `--method` with
+//!   any other trade, is a usage error (exit 2).
 //! * `bim validate <dir> [--standard <pack>] [--json]` reports the dangling refs, the materialized
 //!   `ConflictDiagnostic` entities and, with `--standard`, the violations of that rule set; exit 1
 //!   if there is any. `<pack>` is a registered rule-set id, else the path of an existing file,
@@ -25,6 +27,7 @@ use std::io::Write;
 use std::path::Path;
 
 use bim_arch::ArchEngine;
+use bim_mep::{Method, MepEngine};
 use bim_plugin::{Registry, StandardRuleSet, Violation, WasmRuleSet};
 
 use crate::commands::emit;
@@ -39,15 +42,25 @@ type Outcome = Result<u8, CliError>;
 pub(crate) fn registry() -> Registry {
     let mut registry = Registry::new();
     registry.register_engine(Box::new(ArchEngine::new()));
+    registry.register_engine(Box::new(MepEngine::new()));
     registry
 }
 
-/// `bim solve <dir> --trade <trade> [--json]`.
+/// `bim solve <dir> --trade <trade> [--method newton|hardy-cross] [--json]`.
 pub(crate) fn solve(args: &[OsString], out: &mut dyn Write) -> Outcome {
-    let form = "solve <dir> --trade <trade> --json";
-    let p = parse(args, &["--trade"], form)?;
+    let form = "solve <dir> --trade <trade> [--method newton|hardy-cross] --json";
+    let p = parse(args, &["--trade", "--method"], form)?;
     let trade = p.value("--trade").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--trade` is required")))?;
-    let registry = registry();
+    let mut registry = registry();
+    if let Some(method) = p.value("--method") {
+        if trade != "mep" {
+            return Err(CliError::Usage(format!("`bim {form}`: `--method` applies to the `mep` trade only")));
+        }
+        let method = method.to_str().and_then(Method::parse).ok_or_else(|| {
+            CliError::Usage(format!("unknown method `{}` (known: newton, hardy-cross)", method.to_string_lossy()))
+        })?;
+        registry.register_engine(Box::new(MepEngine::with_method(method)));
+    }
     let engine = trade
         .to_str()
         .and_then(|name| registry.engine(name))
@@ -257,9 +270,10 @@ mod tests {
     }
 
     #[test]
-    fn the_registry_has_arch_and_no_rule_sets() {
+    fn the_registry_has_arch_and_mep_and_no_rule_sets() {
         let registry = registry();
         assert_eq!(registry.engine("arch").map(|e| e.name()), Some("arch"));
+        assert_eq!(registry.engine("mep").map(|e| e.name()), Some("mep"));
         assert!(registry.engine("nope").is_none());
         assert!(registry.rule_set("arch").is_none());
     }
@@ -300,6 +314,40 @@ mod tests {
         assert!(out.lines().next().unwrap().starts_with("wall W volume 2.4"), "{out}");
         assert!(out.lines().next().unwrap().contains(" side_area 12"), "{out}");
         assert_eq!(out.lines().nth(1).unwrap(), "slab S volume 3.2 area 16", "{out}");
+    }
+
+    #[test]
+    fn solve_mep_takes_a_method_and_rejects_bad_ones() {
+        let tmp = TempDir::new();
+        let dir = tmp.path().join("p");
+        let d = dir.to_str().unwrap();
+        assert_eq!(run(&["init", d]).0, 0);
+        let ops = tmp.path().join("m.json");
+        fs::write(&ops, r#"{"schema":1,"ops":[
+          {"op":"create","id":"W","kind":"MepSystem","props":{"name":"W","medium":"water","density":998.2,"viscosity":0.001002}},
+          {"op":"create","id":"s","kind":"Port","props":{"system":{"ref":"W"},"x":0,"y":0,"z":0,"kind":"source","pressure":300000}},
+          {"op":"create","id":"k","kind":"Port","props":{"system":{"ref":"W"},"x":30,"y":0,"z":0,"kind":"sink","flow":0.003}},
+          {"op":"create","id":"p","kind":"Segment","props":{"from":{"ref":"s"},"to":{"ref":"k"},"shape":"round","diameter":0.05,"roughness":0}}
+        ]}"#).unwrap();
+        assert_eq!(run(&["apply", d, ops.to_str().unwrap()]).0, 0);
+        let (code, newton, err) = run(&["solve", d, "--trade", "mep", "--json"]);
+        assert_eq!(code, 0, "{err}");
+        let doc: serde_json::Value = serde_json::from_str(&newton).unwrap();
+        assert_eq!(doc["segments"][0]["id"], "p");
+        assert!((doc["segments"][0]["flow"].as_f64().unwrap() - 0.003).abs() < 1e-15, "{newton}");
+        assert_eq!(doc["ports"][0]["id"], "k");
+        assert_eq!(doc["ports"][1]["pressure"], 300000.0);
+        assert_eq!(doc["circuits"], serde_json::json!([]));
+        let (code, hc, _) = run(&["solve", d, "--trade", "mep", "--method", "hardy-cross", "--json"]);
+        assert_eq!((code, hc.contains("\"continuity_residual\"")), (0, true));
+        assert_eq!(run(&["solve", d, "--trade", "mep", "--method", "newton", "--json"]).0, 0);
+        assert_eq!(run(&["solve", d, "--trade", "mep", "--method", "gauss", "--json"]).0, 2);
+        assert_eq!(run(&["solve", d, "--trade", "arch", "--method", "newton", "--json"]).0, 2);
+        assert_eq!(run(&["solve", d, "--trade", "mep", "--method"]).0, 2);
+        // A sink with no source to feed it is invalid input.
+        fs::write(&ops, r#"{"schema":1,"ops":[{"op":"set","id":"s","key":"kind","value":"junction"}]}"#).unwrap();
+        assert_eq!(run(&["apply", d, ops.to_str().unwrap()]).0, 0);
+        assert_eq!(run(&["solve", d, "--trade", "mep", "--json"]).0, 2);
     }
 
     #[test]
