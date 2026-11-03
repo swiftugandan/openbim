@@ -13,27 +13,39 @@
 //!
 //! The result is the `bim solve --trade mep --json` document of spec/cli.md:
 //! `{"segments":[{"id","flow","velocity","dp","reynolds","friction_factor","size"}],
-//! "ports":[{"id","pressure"}],"continuity_residual":r,"circuits":[]}`, segments and ports by
-//! name. `flow` is + from `from` to `to`, `dp` = p(from) − p(to), `velocity` = |flow|/area,
+//! "ports":[{"id","pressure"}],"continuity_residual":r,
+//! "circuits":[{"id","current","voltage_drop","voltage_drop_pct"}]}`, segments, ports and circuits
+//! by name. `flow` is + from `from` to `to`, `dp` = p(from) − p(to), `velocity` = |flow|/area,
 //! `ports[].pressure` the gauge static pressure (a source reports its fixed value), and
 //! `continuity_residual` the largest |inflow − outflow − demand| over the non-source ports. At
 //! zero flow a segment reports Re 0, friction factor 0 and dp 0. `size` is the recommended nominal
-//! size ([`recommend_size`]). Circuits are not computed by this engine yet (`[]`).
+//! size ([`recommend_size`]).
+//!
+//! **Circuits** ([`circuits`]) are independent of the hydraulics: `current = Σ load_watts /
+//! voltage`, `voltage_drop = current · 2 · resistivity · length / conductor_area` and
+//! `voltage_drop_pct = 100 · voltage_drop / voltage`. A Port that only a Circuit refers to (as its
+//! `panel` or one of its `loads`) and no Segment uses is not part of a hydraulic network: it is
+//! neither validated nor reported. A `MepSystem` without Segments has nothing to solve (its ports
+//! report their fixed pressure, else 0, and its demands count in `continuity_residual`).
 //!
 //! Invalid input is [`EngineError::Input`] (exit 2): a missing or wrong-kind `system`/`from`/`to`
 //! Ref, a segment between two systems or from a port to itself, an unknown `medium`, `kind` or
 //! `shape`, a non-positive or missing density, viscosity, diameter, width or height, a negative or
 //! missing roughness, a negative minor_k, a source without `pressure`, a segment with no
-//! resistance at all (zero length and no minor loss), or a connected part of a network without a
-//! source. A network whose iteration does not converge is [`EngineError::Failed`] (exit 1); in
-//! particular one whose solution would put a segment exactly at Re 2000, where the friction law
-//! jumps, fails naming the segments that keep switching regime. A Port
-//! with no `system` that no segment uses is not part of any network and not reported.
+//! resistance at all (zero length and no minor loss), a connected part of a network without a
+//! source, or a Circuit whose `panel` or a load is not a Port, whose `loads` and `load_watts` are
+//! not lists of the same length, whose `voltage` or `conductor_area` is not positive or whose
+//! `resistivity` or `length` is negative or missing. A network whose iteration does not converge
+//! is [`EngineError::Failed`] (exit 1); in particular one whose solution would put a segment
+//! exactly at Re 2000, where the friction law jumps, fails naming the segments that keep
+//! switching regime. A Port with no `system` that no segment uses is not part of any network and
+//! not reported.
 
+pub mod circuits;
 pub mod hydraulics;
 pub mod solver;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bim_doc::{Entity, EntityId, Value};
 use bim_plugin::{EngineContext, EngineError, TradeEngine};
@@ -188,6 +200,16 @@ fn positive(name: &str, e: &Entity, key: &str) -> Result<f64, EngineError> {
     }
 }
 
+/// Like [`req_num`], but zero is allowed.
+fn non_negative(name: &str, e: &Entity, key: &str) -> Result<f64, EngineError> {
+    let x = req_num(name, e, key)?;
+    if x >= 0.0 {
+        Ok(x)
+    } else {
+        Err(input(format!("{} `{name}`: `{key}` must not be negative, got {x}", e.kind)))
+    }
+}
+
 fn text<'e>(name: &str, e: &'e Entity, key: &str) -> Result<&'e str, EngineError> {
     match e.props.get(key) {
         Some(Value::Text(s)) => Ok(s),
@@ -207,6 +229,82 @@ fn reference(ctx: &EngineContext<'_>, name: &str, e: &Entity, key: &str, kind: &
         None => Err(input(format!("{} `{name}`: `{key}` is required", e.kind))),
         Some(_) => Err(input(format!("{} `{name}`: `{key}` must be a Ref to a {kind}", e.kind))),
     }
+}
+
+/// The Refs in the List prop `key` of `e`, each of which must be a live entity of kind `kind`.
+fn reference_list(ctx: &EngineContext<'_>, name: &str, e: &Entity, key: &str, kind: &str) -> Result<Vec<EntityId>, EngineError> {
+    let Some(Value::List(items)) = e.props.get(key) else {
+        return Err(input(format!("{} `{name}`: `{key}` must be a list of Refs to {kind}s", e.kind)));
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::Ref(id) => match ctx.document().get(*id) {
+                Some(t) if t.kind == kind => Ok(*id),
+                Some(t) => Err(input(format!("{} `{name}`: `{key}` holds {} `{}`, not a {kind}", e.kind, t.kind, ctx.name(*id)))),
+                None => Err(input(format!("{} `{name}`: `{key}` holds missing entity `{}`", e.kind, ctx.name(*id)))),
+            },
+            _ => Err(input(format!("{} `{name}`: `{key}` must be a list of Refs to {kind}s", e.kind))),
+        })
+        .collect()
+}
+
+/// The finite numbers in the List prop `key` of `e`.
+fn number_list(name: &str, e: &Entity, key: &str) -> Result<Vec<f64>, EngineError> {
+    let Some(Value::List(items)) = e.props.get(key) else {
+        return Err(input(format!("{} `{name}`: `{key}` must be a list of numbers", e.kind)));
+    };
+    items
+        .iter()
+        .map(|item| match item {
+            Value::Num(x) if x.is_finite() => Ok(*x),
+            _ => Err(input(format!("{} `{name}`: `{key}` must be a list of finite numbers", e.kind))),
+        })
+        .collect()
+}
+
+/// Every Port that a Circuit refers to as its `panel` or among its `loads` (whatever else is wrong
+/// with the circuit is reported when it is solved).
+fn circuit_ports(ents: &[(String, &Entity)]) -> HashSet<EntityId> {
+    let mut ports = HashSet::new();
+    for (_, e) in ents.iter().filter(|(_, e)| e.kind == "Circuit") {
+        if let Some(Value::Ref(id)) = e.props.get("panel") {
+            ports.insert(*id);
+        }
+        if let Some(Value::List(loads)) = e.props.get("loads") {
+            ports.extend(loads.iter().filter_map(|v| if let Value::Ref(id) = v { Some(*id) } else { None }));
+        }
+    }
+    ports
+}
+
+/// The solved `circuits` array: every `Circuit`, by name.
+fn solve_circuits(ctx: &EngineContext<'_>, ents: &[(String, &Entity)]) -> Result<Vec<Json>, EngineError> {
+    let mut out = Vec::new();
+    for (name, e) in ents.iter().filter(|(_, e)| e.kind == "Circuit") {
+        reference(ctx, name, e, "panel", "Port")?;
+        let loads = reference_list(ctx, name, e, "loads", "Port")?;
+        let watts = number_list(name, e, "load_watts")?;
+        if watts.len() != loads.len() {
+            return Err(input(format!(
+                "Circuit `{name}`: `load_watts` has {} entries but `loads` has {}",
+                watts.len(),
+                loads.len()
+            )));
+        }
+        let voltage = positive(name, e, "voltage")?;
+        let area = positive(name, e, "conductor_area")?;
+        let resistivity = non_negative(name, e, "resistivity")?;
+        let length = non_negative(name, e, "length")?;
+        let r = circuits::circuit(&watts, voltage, area, resistivity, length);
+        out.push(json!({
+            "id": name,
+            "current": num(r.current),
+            "voltage_drop": num(r.voltage_drop),
+            "voltage_drop_pct": num(r.voltage_drop_pct),
+        }));
+    }
+    Ok(out)
 }
 
 struct System {
@@ -260,7 +358,7 @@ fn solve_document(ctx: &EngineContext<'_>, method: Method) -> Result<Json, Engin
         systems.push(System { fluid, medium, ports: Vec::new(), segments: Vec::new() });
     }
     // Segments reference ports: a port without `system` is only an error if a segment uses it.
-    let used: std::collections::HashSet<EntityId> = ents
+    let used: HashSet<EntityId> = ents
         .iter()
         .filter(|(_, e)| e.kind == "Segment")
         .flat_map(|(_, e)| ["from", "to"].into_iter().filter_map(|k| match e.props.get(k) {
@@ -268,11 +366,13 @@ fn solve_document(ctx: &EngineContext<'_>, method: Method) -> Result<Json, Engin
             _ => None,
         }))
         .collect();
+    // A port that only a circuit refers to is electrical, not part of a hydraulic network.
+    let electrical = circuit_ports(&ents);
     // Ports.
     let mut ports: Vec<PortIn> = Vec::new();
     let mut port_index: HashMap<EntityId, (usize, usize)> = HashMap::new(); // id -> (port, system)
     for (name, e) in ents.iter().filter(|(_, e)| e.kind == "Port") {
-        if !e.props.contains_key("system") && !used.contains(&e.id) {
+        if !used.contains(&e.id) && (!e.props.contains_key("system") || electrical.contains(&e.id)) {
             continue;
         }
         let sys = system_index[&reference(ctx, name, e, "system", "MepSystem")?];
@@ -325,6 +425,13 @@ fn solve_document(ctx: &EngineContext<'_>, method: Method) -> Result<Json, Engin
     let mut pressure = vec![0.0; ports.len()];
     let mut system_of = vec![0; segments.len()];
     for (si, sys) in systems.iter().enumerate() {
+        if sys.segments.is_empty() {
+            // Nothing connects the ports: nothing flows and only a source has a pressure to report.
+            for &p in &sys.ports {
+                pressure[p] = ports[p].fixed.unwrap_or(0.0);
+            }
+            continue;
+        }
         let local: HashMap<usize, usize> = sys.ports.iter().enumerate().map(|(k, &p)| (p, k)).collect();
         let nodes = sys.ports.iter().map(|&p| Node { fixed: ports[p].fixed, demand: ports[p].demand }).collect();
         let pipes = sys.segments.iter().map(|&s| segments[s].pipe(local[&segments[s].from], local[&segments[s].to])).collect();
@@ -381,7 +488,7 @@ fn solve_document(ctx: &EngineContext<'_>, method: Method) -> Result<Json, Engin
     out.insert("segments".into(), Json::Array(seg_json));
     out.insert("ports".into(), Json::Array(port_json));
     out.insert("continuity_residual".into(), num(residual));
-    out.insert("circuits".into(), Json::Array(Vec::new()));
+    out.insert("circuits".into(), Json::Array(solve_circuits(ctx, &ents)?));
     Ok(Json::Object(out))
 }
 
