@@ -14,7 +14,7 @@ j=judges/T2.8
 tmp=$(mktemp -d)
 pids=()
 # Background oracle checks are killed on any exit (bash 3.2-safe empty-array expansion).
-trap 'kill ${pids[@]+"${pids[@]}"} 2>/dev/null; rm -rf "$tmp"' EXIT
+trap 'kill ${pids[@]+"${pids[@]}"} 2>/dev/null || true; rm -rf "$tmp"' EXIT
 
 [ -x "$py" ] || fail "missing oracle $py (run loop/setup.sh)"
 
