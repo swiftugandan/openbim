@@ -1,10 +1,10 @@
-//! The commands over the compiled building geometry ([`bim_model`]):
+//! The compiled building geometry ([`bim_model`]) and the commands over it:
 //!
-//! * `bim solve <dir> --trade arch [--json]` prints the architectural quantities (spec/cli.md):
+//! * [`arch_json`] is the result of the `arch` trade engine (registered by [`crate::engines`], which
+//!   runs `bim solve`): the architectural quantities (spec/cli.md)
 //!   `{"rooms":[],"walls":[{"id","volume","side_area","layers":[{"material","volume"}]}],
 //!   "slabs":[{"id","volume","area"}],"stairs":[],"curtain_walls":[]}` (rooms, stairs and curtain
-//!   walls come with later engines). Without `--json` it prints one line per wall and slab. Any
-//!   other trade is a usage error (exit 2).
+//!   walls come with later engines).
 //! * `bim export <dir> --format gltf --out <file>` writes the glTF 2.0 document of
 //!   [`bim_model::gltf`]: one mesh node per element with `extras.id`. Any other format is a usage
 //!   error (exit 2). The file is written to a temporary file next to it and renamed into place.
@@ -23,13 +23,13 @@ use crate::CliError;
 type Outcome = Result<u8, CliError>;
 
 /// Operands and `--flag value` / `--json` options, in any order.
-struct Parsed<'a> {
-    positional: Vec<&'a OsString>,
+pub(crate) struct Parsed<'a> {
+    pub(crate) positional: Vec<&'a OsString>,
     values: Vec<(&'static str, &'a OsString)>,
-    json: bool,
+    pub(crate) json: bool,
 }
 
-fn parse<'a>(args: &'a [OsString], valued: &[&'static str], form: &str) -> Result<Parsed<'a>, CliError> {
+pub(crate) fn parse<'a>(args: &'a [OsString], valued: &[&'static str], form: &str) -> Result<Parsed<'a>, CliError> {
     let usage = |what: String| CliError::Usage(format!("`bim {form}`: {what}"));
     let mut p = Parsed { positional: Vec::new(), values: Vec::new(), json: false };
     let mut it = args.iter();
@@ -58,27 +58,13 @@ fn parse<'a>(args: &'a [OsString], valued: &[&'static str], form: &str) -> Resul
 }
 
 impl Parsed<'_> {
-    fn value(&self, flag: &str) -> Option<&OsString> {
+    pub(crate) fn value(&self, flag: &str) -> Option<&OsString> {
         self.values.iter().find(|(f, _)| *f == flag).map(|(_, v)| *v)
     }
 }
 
-/// `bim solve <dir> --trade arch [--json]`.
-pub(crate) fn solve(args: &[OsString], out: &mut dyn Write) -> Outcome {
-    let form = "solve <dir> --trade <trade> --json";
-    let p = parse(args, &["--trade"], form)?;
-    let trade = p.value("--trade").ok_or_else(|| CliError::Usage(format!("`bim {form}`: `--trade` is required")))?;
-    if trade != "arch" {
-        return Err(CliError::Usage(format!("unknown trade `{}` (known: arch)", trade.to_string_lossy())));
-    }
-    let project = Project::open(Path::new(p.positional[0]))?;
-    let model = Model::compile(&project.doc);
-    let text = if p.json { arch_json(&model) } else { arch_text(&model) };
-    write!(out, "{text}").map_err(|e| CliError::Input(format!("cannot write to standard output: {e}")))?;
-    Ok(0)
-}
-
-fn arch_json(model: &Model) -> String {
+/// The `arch` trade's result (spec/cli.md) as JSON text, one line.
+pub(crate) fn arch_json(model: &Model) -> String {
     let mut s = String::from("{\"rooms\":[],\"walls\":[");
     for (i, w) in model.walls.iter().enumerate() {
         if i > 0 {
@@ -117,17 +103,6 @@ fn arch_json(model: &Model) -> String {
         s.push('}');
     }
     s.push_str("],\"stairs\":[],\"curtain_walls\":[]}\n");
-    s
-}
-
-fn arch_text(model: &Model) -> String {
-    let mut s = String::new();
-    for w in &model.walls {
-        s.push_str(&format!("wall {} volume {} side_area {}\n", w.name, w.volume, w.side_area));
-    }
-    for sl in &model.slabs {
-        s.push_str(&format!("slab {} volume {} area {}\n", sl.name, sl.volume, sl.area));
-    }
     s
 }
 

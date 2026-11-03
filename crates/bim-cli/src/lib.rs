@@ -6,7 +6,7 @@
 //! | `bim apply <dir> <ops-file>` | appends the file's ops (`*.json`: JSON ops, else the line format; see [`ops`]) to the journal and the store, in one SQLite transaction; all or none. A create of a kind that is neither core nor declared by a trade package, and a create or set that breaks an extension kind's prop declarations, are refused |
 //! | `bim show <dir> <id> --json` | prints the entity as `{"id","kind","props"}` (spec/cli.md) |
 //! | `bim hash <dir>` | prints the document's `content_hash` as 16 lowercase hex digits |
-//! | `bim validate <dir>` | prints one `dangling <source> <key> <target>` line per dangling ref; exit 1 if any |
+//! | `bim validate <dir> [--standard <pack>] [--json]` | reports dangling refs (one `dangling <source> <key> <target>` line each), materialized conflicts and, with `--standard`, the violations of a rule set resolved through the [`bim_plugin::Registry`]: a registered id or a `rule-set` WebAssembly component file; `--json` prints `{"violations","dangling","conflicts"}`; exit 1 if any (see the private `engines` module) |
 //! | `bim commit <dir> -m <msg>` | records a revision and prints its id, the content hash at that moment |
 //! | `bim log <dir> --json` | prints `[{"rev","message","ops"}]`, oldest revision first, `ops` the ids of the ops recorded since the previous one |
 //! | `bim diff <dirA> <dirB>` | prints `same` (exit 0) or `differ` (exit 1) |
@@ -14,18 +14,21 @@
 //! | `bim plugin list <dir> --json` | prints the trade packages in `<dir>/plugins` and the core kinds (spec/cli.md) |
 //! | `bim sync serve <dir> --port <p>` | serves the project over WebSocket on `127.0.0.1`, printing `listening <port>` first (the design is in the private `sync` module) |
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
-//! | `bim solve <dir> --trade arch --json` | prints the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); other trades exit 2 (see the private `geometry` module) |
+//! | `bim solve <dir> --trade <trade> --json` | prints the result of the trade engine named `<trade>` in the [`bim_plugin::Registry`] as one JSON document; `arch` gives the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); an unknown trade exits 2 (see the private `engines` and `geometry` modules) |
 //! | `bim export <dir> --format gltf --out <file>` | writes the glTF 2.0 model: one closed mesh node per element with `extras.id`, y-up; other formats exit 2 |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
 //! * `0` success;
-//! * `1` the command ran and found a problem (`validate` found dangling refs, `diff` found a difference);
+//! * `1` the command ran and found a problem (`validate` found dangling refs, conflicts or violations, `diff` found a difference);
 //! * `2` the command could not run: wrong usage, an invalid ops file or op (an undeclared kind or a
 //!   broken extension prop included), an unknown or deleted entity for `show`, an unknown revision, a missing directory, a
 //!   directory that is not a project, a malformed or inconsistent trade package, an unreadable or
 //!   unwritable file, a corrupt journal, an unusable store. Nothing is changed;
-//! * `3` internal error (a bug in `bim` itself: a panic).
+//!   An unknown `--trade` or `--standard`, and a `--standard` file that is not a valid `rule-set`
+//!   component, are usage errors too;
+//! * `3` internal error (a bug in `bim` itself: a panic), or a plugin component that trapped, ran
+//!   out of fuel or time, or hit its memory limit (spec/plugins.md).
 //!
 //! The project directory holds a text journal, `doc.oplog` (see [`project`]); every command rebuilds
 //! the [`bim_doc::Document`] by replaying it. Every command that reads `<dir>` first loads the trade
@@ -39,6 +42,7 @@
 #![forbid(unsafe_code)]
 
 mod commands;
+mod engines;
 mod geometry;
 pub mod json;
 pub mod ops;
@@ -57,7 +61,7 @@ pub const USAGE: &str = "usage:
   bim apply <dir> <ops-file>
   bim hash <dir>
   bim show <dir> <id> --json
-  bim validate <dir>
+  bim validate <dir> [--standard <pack>] [--json]
   bim commit <dir> -m <msg>
   bim log <dir> --json
   bim diff <dirA> <dirB>
@@ -65,7 +69,7 @@ pub const USAGE: &str = "usage:
   bim plugin list <dir> --json
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
-  bim solve <dir> --trade arch --json
+  bim solve <dir> --trade <trade> --json
   bim export <dir> --format gltf --out <file>";
 
 /// Why a command did not run to completion.
@@ -78,15 +82,21 @@ pub enum CliError {
     Input(String),
     /// A bug in `bim` itself.
     Internal(String),
+    /// A trade engine or rule set failed ([`bim_plugin::EngineError`]): exit 2 for unusable input
+    /// (a file that is not a valid plugin component), 1 for a failure the engine reports, 3 for a
+    /// plugin that crashed (trap, fuel or time exhaustion, memory failure).
+    Engine(bim_plugin::EngineError),
 }
 
 impl CliError {
     /// The process exit code for this error (spec/cli.md): 2 for [`Usage`](CliError::Usage) and
-    /// [`Input`](CliError::Input), 3 for [`Internal`](CliError::Internal).
+    /// [`Input`](CliError::Input), 3 for [`Internal`](CliError::Internal), the engine error's own
+    /// code for [`Engine`](CliError::Engine).
     pub fn exit_code(&self) -> u8 {
         match self {
             CliError::Usage(_) | CliError::Input(_) => 2,
             CliError::Internal(_) => 3,
+            CliError::Engine(e) => e.exit_code(),
         }
     }
 }
@@ -96,6 +106,7 @@ impl fmt::Display for CliError {
         match self {
             CliError::Usage(message) | CliError::Input(message) => f.write_str(message),
             CliError::Internal(message) => write!(f, "internal error: {message}"),
+            CliError::Engine(e) => write!(f, "{e}"),
         }
     }
 }
@@ -132,13 +143,13 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("apply") => commands::apply(operands, out),
         Some("hash") => commands::hash(operands, out),
         Some("show") => commands::show(operands, out),
-        Some("validate") => commands::validate(operands, out),
+        Some("validate") => engines::validate(operands, out),
         Some("commit") => commands::commit(operands, out),
         Some("log") => commands::log(operands, out),
         Some("diff") => commands::diff(operands, out),
         Some("plugin") => commands::plugin(operands, out),
         Some("sync") => commands::sync(operands, out),
-        Some("solve") => geometry::solve(operands, out),
+        Some("solve") => engines::solve(operands, out),
         Some("export") => geometry::export(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
     }

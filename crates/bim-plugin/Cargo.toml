@@ -1,0 +1,18 @@
+[package]
+name = "bim-plugin"
+description = "Plugin boundary: TradeEngine / StandardRuleSet traits, Registry, and the WASM component host for rule sets"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+bim-doc = { path = "../bim-doc" }
+bim-model = { path = "../bim-model" }
+serde_json = { version = "=1.0.140", features = ["preserve_order"] }
+anyhow = "=1.0.104"
+wasmtime = { version = "=38.0.0", default-features = false, features = ["cranelift", "component-model", "runtime", "std", "parallel-compilation"] }
+wasmtime-wasi = { version = "=38.0.0", default-features = false, features = ["p2"] }
+
+[dev-dependencies]
+wat = "=1.263.0"
