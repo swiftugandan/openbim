@@ -238,7 +238,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
 
 ## M4 Trade engines and plugin boundary
 
-- [ ] T4.1: plugin boundary: TradeEngine/StandardRuleSet traits, registry, WASM component host
+- [x] T4.1: plugin boundary: TradeEngine/StandardRuleSet traits, registry, WASM component host
   - Files: Cargo.toml, Cargo.lock, crates/bim-plugin/, crates/bim-cli/
   - Opens: T2.7
   - Needs: .oracles/rust-wasip2

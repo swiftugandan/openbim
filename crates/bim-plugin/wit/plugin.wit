@@ -1,0 +1,13 @@
+// The `rule-set` world of spec/plugins.md ("WASM Component Model plugins"), verbatim.
+package openbim:plugin@0.1.0;
+
+interface types {
+  record entity { id: string, kind: string, props-json: string }
+  record violation { rule: string, entity: string, message: string, measured: f64, limit: f64 }
+}
+
+world rule-set {
+  use types.{entity, violation};
+  export id: func() -> string;
+  export check: func(entities: list<entity>) -> list<violation>;
+}
