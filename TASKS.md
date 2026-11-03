@@ -164,7 +164,7 @@ The loop's gate also reruns every earlier `[x]` task's Verification, so regressi
   - Spec: `bim_geom::hlr(solids: &[Solid], view: &OrthoView) -> HlrResult { visible: Vec<Seg2>, hidden: Vec<Seg2> }` for orthographic views (`OrthoView { dir, up }`): feature edges (dihedral > 1e-9) and silhouettes are split at every projected crossing and classified exactly (visibility changes only at crossings), with collinear overlaps merged. Each segment carries the source solid index. Judge: closed-form scenes (cube, stacked boxes, occluding prisms) plus random scenes checked by casting rays from many points on each segment with trimesh.
   - Details: `OrthoView { pub dir: Vec3, pub up: Vec3 }` (dir from eye into the scene); projected coordinates are (p·r, p·v) with r = normalize(dir × up), v = r × normalize(dir); `Seg2 { pub a: Point2, pub b: Point2, pub solid: usize }`; `HlrResult { pub visible: Vec<Seg2>, pub hidden: Vec<Seg2> }`; `hlr`, `OrthoView`, `Seg2`, `HlrResult` at the crate root. Input solids have disjoint interiors (they may touch); edges shared by touching solids are reported once.
 
-- [ ] T2.7: building geometry compiler: schema → solids, joins, openings, glTF export
+- [x] T2.7: building geometry compiler: schema → solids, joins, openings, glTF export
   - Files: Cargo.toml, Cargo.lock, crates/bim-model/, crates/bim-cli/
   - Opens: T2.2, T1.6
   - Needs: .oracles/py/bin/python, .oracles/node/node_modules/gltf-validator
