@@ -15,6 +15,7 @@ name = "bim"
 path = "src/main.rs"
 
 [dependencies]
+bim-bcf = { path = "../standards/bcf" }
 bim-doc = { path = "../bim-doc" }
 bim-ifc = { path = "../standards/ifc" }
 bim-model = { path = "../bim-model" }

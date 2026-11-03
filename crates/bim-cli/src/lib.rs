@@ -16,6 +16,9 @@
 //! | `bim sync <dir> <ws-url>` | exchanges state with such a server until both hold the same edits; exit 2, changing nothing, if it cannot |
 //! | `bim solve <dir> --trade arch --json` | prints the architectural quantities of the compiled geometry (`bim-model`): walls (volume, side_area, layers), slabs (volume, net area); other trades exit 2 (see the private `geometry` module) |
 //! | `bim export <dir> --format gltf\|ifc --out <file>` | writes the glTF 2.0 model (one closed mesh node per element with `extras.id`, y-up) or the IFC4 file (`bim_ifc::export`); other formats exit 2 |
+//! | `bim bcf <dir> create --title <t> --entity <id> [<id>…]` | makes a BCF 3.0 topic about those entities, mirrors it as an `Issue` entity (id = the topic Guid as a seed, `status` = TopicStatus, `entities` = Refs to the components) and prints the Guid as its only output line (see the private `bcf` module) |
+//! | `bim bcf <dir> export <file.bcfzip>` | writes every `Issue` entity as a BCF 3.0 archive (viewpoint components carry the IFC4 export's GlobalIds); the project is not changed |
+//! | `bim bcf <dir> import <file.bcfzip>` | mirrors every topic of a BCF 3.0 archive as an `Issue` entity, atomically; a file that is not a BCF 3.0 archive, or a component that is not an entity of the project, exits 2 with nothing applied |
 //!
 //! Results go to stdout and every message to stderr. Exit codes:
 //!
@@ -38,6 +41,7 @@
 
 #![forbid(unsafe_code)]
 
+mod bcf;
 mod commands;
 mod geometry;
 pub mod json;
@@ -66,7 +70,10 @@ pub const USAGE: &str = "usage:
   bim sync serve <dir> --port <p>
   bim sync <dir> <ws-url>
   bim solve <dir> --trade arch --json
-  bim export <dir> --format gltf|ifc --out <file>";
+  bim export <dir> --format gltf|ifc --out <file>
+  bim bcf <dir> create --title <t> --entity <id> [<id>…]
+  bim bcf <dir> export <file.bcfzip>
+  bim bcf <dir> import <file.bcfzip>";
 
 /// Why a command did not run to completion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,6 +147,7 @@ fn dispatch(args: &[OsString], out: &mut dyn Write) -> Result<u8, CliError> {
         Some("sync") => commands::sync(operands, out),
         Some("solve") => geometry::solve(operands, out),
         Some("export") => geometry::export(operands, out),
+        Some("bcf") => bcf::bcf(operands, out),
         _ => Err(CliError::Usage(format!("unknown command `{}`", command.to_string_lossy()))),
     }
 }
@@ -220,7 +228,7 @@ mod tests {
 
     #[test]
     fn usage_errors_exit_2_with_usage_on_stderr_only() {
-        let cases: [&[&str]; 37] = [
+        let cases: [&[&str]; 42] = [
             &[],
             &["frobnicate"],
             &["--help"],
@@ -258,6 +266,11 @@ mod tests {
             &["sync", "serve", "--port", "1"],
             &["sync", "serve", "d", "--port", "1", "--port", "2"],
             &["sync", "d", "--port", "1"],
+            &["bcf"],
+            &["bcf", "d"],
+            &["bcf", "d", "frobnicate"],
+            &["bcf", "d", "create", "--title", "t"],
+            &["bcf", "d", "export"],
         ];
         for args in cases {
             let (code, out, err) = run_str(args);
