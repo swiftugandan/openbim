@@ -15,6 +15,7 @@ The Spec bullet above is the contract. Its Verification is: `{{VERIFY}}`
 - Oracles used by judges live in `.oracles/` (Python: `.oracles/py/bin/python`); you may use them to test.
 {{GIT_RULE}}
 - Scratch work and probes go under `.loop/probes/{{ID}}/` (git-ignored). Cargo builds for probes use `CARGO_TARGET_DIR=.build/probes`.
+- Known issue on `main`, accepted for now: GitHub issue #24. `bim_geom::boolean` of mitred sweeps sharing a leg can return `Ok` with non-manifold geometry, and chaining such a result returns `Err`. AUDIT must not fail this task because of that bug alone; it reports any impact it finds instead. Do not edit paths outside Files: to fix it. CHECK still has to pass, and so does the loop's gate.
 - No network services and no credentials. External crates and npm packages are allowed when the task needs them: pin exact versions; nothing may reach the network at run time.
 
 ## Stages
